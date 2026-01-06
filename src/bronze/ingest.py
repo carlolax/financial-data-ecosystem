@@ -1,51 +1,56 @@
 import requests
 import json
-import os
 from datetime import datetime
+from google.cloud import storage
 
 # Setup Config
-TARGET_FOLDER = "data/bronze"
-OS_MAKEDIRS_MODE = 0o755 # Read/Write permissions
-
-# CoinGecko API
+BUCKET_NAME = "crypto-lake-carlo-2026-v1" 
+COINS = ["bitcoin", "ethereum", "solana"]
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
-COINGECKO_PARAMS = {
-    "ids": "bitcoin,ethereum,solana",
-    "vs_currencies": "usd",
-    "include_market_cap": "true",
-    "include_24hr_vol": "true",
-    "include_24hr_change": "true"
-}
 
-def fetch_market_data():
-    print(f"Fetching data from CoinGecko.")
+def fetch_prices():
+    coingecko_params = {
+        "ids": ",".join(COINS),
+        "vs_currencies": "usd",
+        "include_market_cap": "true",
+        "include_24hr_vol": "true",
+        "include_24hr_change": "true"
+    }
 
     try:
-        response = requests.get(COINGECKO_URL, params=COINGECKO_PARAMS, timeout=10)
+        response = requests.get(COINGECKO_URL, params=coingecko_params)
         response.raise_for_status()
         return response.json()
-    except Exception as error:
-        print(f"API Error: {error}")
+    except requests.exceptions.RequestException as request_error:
+        print(f"API Error: {request_error}")
         return None
 
-def save_raw_data(data):
-    # Ensure the folder exists
-    if not os.path.exists(TARGET_FOLDER):
-        os.makedirs(TARGET_FOLDER, mode=OS_MAKEDIRS_MODE)
-
+def upload_to_gcs(data, bucket_name):
     # Create a filename with a timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    filename = f"{TARGET_FOLDER}/raw_{timestamp}.json"
+    filename = f"raw_data/prices_{timestamp}.json"
 
-    with open(filename, "w") as file:
-        json.dump(data, file, indent=4)
+    # Connect to the client
+    storage_client = storage.Client()
+    client_bucket = storage_client.bucket(bucket_name)
+    blob = client_bucket.blob(filename)
 
-    print(f"Data saved to: {filename}")
+    # Upload the data
+    blob.upload_from_string(
+        data=json.dumps(data, indent=4),
+        content_type="application/json"
+    )
+
+    print(f"Data uploaded to: gs://{bucket_name}/{filename}")
 
 if __name__ == "__main__":
-    market_data = fetch_market_data()
+    print(f"Starting ingestion process.")
+    price_data = fetch_prices()
 
-    if market_data:
-        save_raw_data(market_data)
+    if price_data:
+        try:
+            upload_to_gcs(price_data, BUCKET_NAME)
+        except Exception as upload_error:
+            print(f"Error uploading to GCS: {upload_error}")
     else:
-        print("Failed to fetch market data.")
+        print("No data to save.")
