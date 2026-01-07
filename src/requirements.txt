@@ -1,4 +1,5 @@
 certifi==2025.10.5
+gcsfs==2025.12.0
 google-cloud-storage==3.7.0
 pandas==2.3.3
 requests==2.32.5

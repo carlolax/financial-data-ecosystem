@@ -13,3 +13,8 @@ variable "bucket_name" {
     description = "The unique name of our Data Lake bucket"
     type        = string
 }
+
+variable "project_id" {
+    description = "The GCP Project ID"
+    type        = string
+}

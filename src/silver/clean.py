@@ -1,68 +1,75 @@
-import json
+from google.cloud import storage
 import pandas as pd
-import glob
-import os
+import json
+from datetime import datetime
 
-# Directories config
-BRONZE_FOLDER = "data/bronze"
-SILVER_FOLDER = "data/silver"
+# Setup config
+PROJECT_ID = "crypto-platform-carlo-2026"
+BRONZE_BUCKET = "crypto-lake-carlo-2026-v1" 
+SILVER_BUCKET = f"crypto-silver-{PROJECT_ID}"
 
-def get_latest_file():
-    list_of_files = glob.glob(f"{BRONZE_FOLDER}/*.json")
+def get_latest_file(bucket_name):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
 
-    if not list_of_files:
+    blobs = list(bucket.list_blobs(prefix="raw_data/"))
+
+    if not blobs:
+        print("No files found in Bronze bucket.")
         return None
-    
-    return max(list_of_files, key=os.path.getctime)
 
-def process_data(file_path):
-    print(f"Processing file: {file_path}")
+    latest_blob = sorted(blobs, key=lambda x: x.time_created)[-1]
+    print(f"Found latest file: {latest_blob.name}")
+    return latest_blob
 
-    with open(file_path, "r") as file:
-        raw_data = json.load(file)
-
-    # Extract timestamp from filename
-    filename = os.path.basename(file_path)
-    # Strip "raw_" prefix to get the date
-    date_str = filename.replace("raw_", "").replace(".json", "")
-
-    # Transform the complex data into a list of rows
-    clean_rows = []
-
-    for coin_name, metrics in raw_data.items():
+def transform_data(json_data):
+    rows = []
+    for coin_name, stats in json_data.items():
         row = {
-            "timestamp": date_str,
             "coin": coin_name,
-            "price_usd": metrics['usd'],
-            "market_cap": metrics['usd_market_cap'],
-            "volume_24h": metrics['usd_24h_vol'],
-            "change_24h": metrics['usd_24h_change']
+            "price_usd": stats.get("usd"),
+            "market_cap": stats.get("usd_market_cap"),
+            "volume_24h": stats.get("usd_24h_vol"),
+            "change_24h": stats.get("usd_24h_change"),
+            "ingested_at": datetime.now()
         }
-        clean_rows.append(row)
+        rows.append(row)
 
-    return pd.DataFrame(clean_rows)
+    df = pd.DataFrame(rows)
+    return df
 
-def save_silver_data(df):
-    if not os.path.exists(SILVER_FOLDER):
-        os.makedirs(SILVER_FOLDER)
+def save_to_silver(df, bucket_name):
+    # Saves the DataFrame as a CSV directly to GCS
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
 
-    # Save the new data to the existing CSV file
-    csv_path = f"{SILVER_FOLDER}/market_history.csv"
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    filename = f"processed_data/crypto_clean_{timestamp}.csv"
 
-    # If header exists, skip it
-    header = not os.path.exists(csv_path)
+    blob = bucket.blob(filename)
 
-    df.to_csv(csv_path, mode='a', header=header, index=False)
-    print(f"Data saved to {csv_path}")
-    print(f"Current shape: {df.shape}")
+    # Convert DataFrame to CSV string (in-memory)
+    csv_data = df.to_csv(index=False)
+
+    blob.upload_from_string(csv_data, content_type="text/csv")
+    print(f"Clean data saved to: gs://{bucket_name}/{filename}")
 
 if __name__ == "__main__":
-    latest_file = get_latest_file()
-
-    if latest_file:
-        df = process_data(latest_file)
-        save_silver_data(df)
-        print(f"\n Preview of data collected:")
-        print(df.head())
-    else:
-        print("No data found. Run the ingestion script first!")
+    print("🚀 Starting Silver Layer Transformation.")
+    
+    # 1. Get the latest raw file
+    blob = get_latest_file(BRONZE_BUCKET)
+    
+    if blob:
+        # 2. Download and Parse JSON
+        json_content = blob.download_as_string()
+        data = json.loads(json_content)
+        
+        # 3. Transform
+        clean_df = transform_data(data)
+        print("📊 Data Preview:")
+        print(clean_df.head())
+        
+        # 4. Load to Silver
+        save_to_silver(clean_df, SILVER_BUCKET)

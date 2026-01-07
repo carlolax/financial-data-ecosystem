@@ -2,19 +2,15 @@
 
 A serverless end-to-end data engineering pipeline that extracts cryptocurrency market data, processes it, and stores it in a Data Lake on Google Cloud Platform (GCP).
 
-# 🪙 Crypto Data Platform (GCP Edition)
-
-A serverless end-to-end data engineering pipeline that extracts cryptocurrency market data, processes it, and stores it in a Data Lake on Google Cloud Platform (GCP).
-
 ## 🏗️ Architecture
-**ETL Flow:**
+**Medallion Architecture Flow:**
 1.  **Extract (Bronze):** Python script fetches real-time prices (Bitcoin, Ethereum, Solana) from CoinGecko API.
 2.  **Load:** Raw JSON data is uploaded to **Google Cloud Storage (GCS)**.
-3.  **Transform (Silver):** *[In Progress]* Cleaning and flattening data into CSV format.
-4.  **Infrastructure:** All cloud resources are provisioned via **Terraform**.
+3.  **Transform (Silver):** Python script cleans the JSON, flattens nested structures, adds timestamps, and saves as structured **CSV**.
+4.  **Infrastructure:** All cloud resources (Bronze & Silver buckets) are provisioned via **Terraform**.
 
 ## 🛠️ Tech Stack
-* **Language:** Python 3.12
+* **Language:** Python 3.12 (Pandas, Requests, GCSFS)
 * **Cloud:** Google Cloud Platform (GCS)
 * **IaC:** Terraform
 * **Containerization:** *[Planned]* Docker
@@ -36,13 +32,17 @@ terraform apply
 ```
 
 ### 3. Run the Pipeline
+**Step 1: Ingest Data (Bronze Layer)** Fetches live data and saves to the Raw Bucket.
 ```bash
-# Ingest Data (Bronze Layer)
 python src/bronze/ingest.py
 ```
 
-## 📂 Project Structure
+**Step 2: Transform Data (Silver Layer)** Cleans the latest raw file and saves to the Clean Bucket.
+```bash
+python src/silver/clean.py
+```
 
+## 📂 Project Structure
 ```bash
 ├── data/           # Local data (gitignored)
 ├── infra/          # Terraform IaaC code
