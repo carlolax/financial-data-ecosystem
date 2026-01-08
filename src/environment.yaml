@@ -1,0 +1,17 @@
+name: crypto-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - duckdb
+  - pyarrow
+  
+  - pip:
+    - gcsfs
+    - google-cloud-storage
+    - pandas
+    - python-dotenv
+    - requests
+    - urllib3

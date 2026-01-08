@@ -1,54 +1,77 @@
 # 🪙 Crypto Data Platform
 
-A serverless end-to-end data engineering pipeline that extracts cryptocurrency market data, processes it, and stores it in a Data Lake on Google Cloud Platform (GCP).
+An end-to-end Data Engineering project built on **Google Cloud Platform (GCP)** using the **Medallion Architecture**.
+This pipeline ingests real-time cryptocurrency data, cleans it, and calculates business metrics (Moving Averages) using high-performance SQL.
 
-## 🏗️ Architecture
-**Medallion Architecture Flow:**
-1.  **Extract (Bronze):** Python script fetches real-time prices (Bitcoin, Ethereum, Solana) from CoinGecko API.
-2.  **Load:** Raw JSON data is uploaded to **Google Cloud Storage (GCS)**.
-3.  **Transform (Silver):** Python script cleans the JSON, flattens nested structures, adds timestamps, and saves as structured **CSV**.
-4.  **Infrastructure:** All cloud resources (Bronze & Silver buckets) are provisioned via **Terraform**.
+---
 
-## 🛠️ Tech Stack
-* **Language:** Python 3.12 (Pandas, Requests, GCSFS)
-* **Cloud:** Google Cloud Platform (GCS)
-* **IaC:** Terraform
-* **Containerization:** *[Planned]* Docker
-* **Orchestration:** *[Planned]* GitHub Actions
+## 🏗 Architecture (Medallion Pattern)
 
-## 🚀 Setup & Usage
+| Layer | Status | Technology | Description |
+| :--- | :--- | :--- | :--- |
+| **Bronze** | ✅ Done | Python, GCS | Raw JSON data ingested from CoinGecko API. |
+| **Silver** | ✅ Done | Pandas, GCS | Cleaned CSV data with standardized types and timestamps. |
+| **Gold** | ✅ Done | **DuckDB**, SQL | Aggregated Parquet files with **7-Day Moving Averages**. |
 
-### 1. Prerequisites
-* Google Cloud SDK (`gcloud`)
-* Terraform
-* Python 3.x
+---
 
-### 2. Infrastructure Setup
+## 🛠 Tech Stack
+
+* **Language:** Python 3.12
+* **Environment:** Miniforge (Conda)
+* **Cloud:** Google Cloud Storage (GCS)
+* **Infrastructure:** Terraform (IaC)
+* **Analytics:** DuckDB (In-memory SQL OLAP)
+* **Format:** JSON (Raw) -> CSV (Processed) -> Parquet (Analytics)
+
+---
+
+## 🚀 How to Run Locally
+
+### 1. Environment Setup
+```bash
+conda env create -f environment.yaml
+
+conda activate crypto-env
+```
+
+### 2. Infrastructure (Terraform)
 ```bash
 cd infra
-# Initialize and Apply Terraform
 terraform init
 terraform apply
 ```
 
-### 3. Run the Pipeline
-**Step 1: Ingest Data (Bronze Layer)** Fetches live data and saves to the Raw Bucket.
+### 3. Data Pipeline Execution
+#### Step 1: Ingest Raw Data (Bronze)
 ```bash
 python src/bronze/ingest.py
 ```
 
-**Step 2: Transform Data (Silver Layer)** Cleans the latest raw file and saves to the Clean Bucket.
+#### Step 2: Clean & Standardize (Silver)
 ```bash
 python src/silver/clean.py
 ```
 
-## 📂 Project Structure
+#### Step 3: Analytics & Aggregation (Gold)
+- Downloads Silver data locally.
+- Runs DuckDB SQL Window Functions to calculate volatility and moving averages.
+- Uploads Parquet files to the Gold bucket.
+
 ```bash
-├── data/           # Local data (gitignored)
-├── infra/          # Terraform IaaC code
+python src/gold/aggregate.py
+```
+
+## 📂 Project Structure
+```plaintext
+├── data/                  # Local temp data (ignored by Git)
+├── infra/                 # Terraform Infrastructure as Code
+│   ├── main.tf            # Bucket definitions (Bronze, Silver, Gold)
+│   └── terraform.tfvars   # Project variables
 ├── src/
-│   ├── bronze/     # Ingestion scripts (API -> GCS)
-│   ├── silver/     # Transformation scripts (GCS -> GCS)
-│   └── gold/       # Feature Engineering (ML Ready)
-└── README.md
+│   ├── bronze/            # Ingestion Scripts
+│   ├── silver/            # Transformation Scripts
+│   └── gold/              # Aggregation Scripts (DuckDB)
+├── environment.yaml       # Conda Environment Definition
+└── requirements.txt       # Cloud Deployment Dependencies
 ```

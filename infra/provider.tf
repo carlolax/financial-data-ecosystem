@@ -8,7 +8,6 @@ terraform {
 }
 
 provider "google" {
-    # We will pass these in via a secure file later
     project = var.gcp_project
     region  = var.gcp_region
 }
