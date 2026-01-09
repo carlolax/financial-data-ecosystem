@@ -1,20 +1,15 @@
-variable "gcp_project" {
-    description = "The ID of the Google Cloud Project"
-    type        = string
+variable "project_id" {
+  description = "The ID of the Google Cloud Project"
+  type        = string
 }
 
-variable "gcp_region" {
-    description = "The region to deploy resources (e.g., us-central1)"
-    type        = string
-    default     = "us-central1" # Free tier friendly region
+variable "region" {
+  description = "The Google Cloud region (e.g., australia-southeast1)"
+  type        = string
+  default     = "australia-southeast1"
 }
 
 variable "bucket_name" {
-    description = "The unique name of our Data Lake bucket"
-    type        = string
-}
-
-variable "project_id" {
-    description = "The GCP Project ID"
-    type        = string
+  description = "The name of the GCS bucket"
+  type        = string
 }

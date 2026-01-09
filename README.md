@@ -1,77 +1,83 @@
-# 🪙 Crypto Data Platform
+# ☁️ Crypto Data Platform (GCP + Python + Terraform)
 
-An end-to-end Data Engineering project built on **Google Cloud Platform (GCP)** using the **Medallion Architecture**.
-This pipeline ingests real-time cryptocurrency data, cleans it, and calculates business metrics (Moving Averages) using high-performance SQL.
+A serverless data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable architecture on Google Cloud Platform.
 
----
+## 🏗 Architecture
 
-## 🏗 Architecture (Medallion Pattern)
+**Region:** `australia-southeast1` (Sydney)
 
-| Layer | Status | Technology | Description |
-| :--- | :--- | :--- | :--- |
-| **Bronze** | ✅ Done | Python, GCS | Raw JSON data ingested from CoinGecko API. |
-| **Silver** | ✅ Done | Pandas, GCS | Cleaned CSV data with standardized types and timestamps. |
-| **Gold** | ✅ Done | **DuckDB**, SQL | Aggregated Parquet files with **7-Day Moving Averages**. |
-
----
+1.  **Ingestion (Bronze):**
+    * **Source:** CoinGecko API.
+    * **Compute:** Google Cloud Function (Python 3.10).
+    * **Trigger:** Cloud Scheduler (Daily cron job).
+    * **Storage:** Google Cloud Storage (JSON).
+2.  **Processing (Silver):** *[Coming Soon]*
+    * DuckDB for cleaning and deduplication.
+    * Parquet storage.
+3.  **Analytics (Gold):** *[Coming Soon]*
+    * Business logic and aggregation.
 
 ## 🛠 Tech Stack
 
-* **Language:** Python 3.12
-* **Environment:** Miniforge (Conda)
-* **Cloud:** Google Cloud Storage (GCS)
-* **Infrastructure:** Terraform (IaC)
-* **Analytics:** DuckDB (In-memory SQL OLAP)
-* **Format:** JSON (Raw) -> CSV (Processed) -> Parquet (Analytics)
+* **Language:** Python 3.10
+* **Infrastructure:** Terraform
+* **Database:** DuckDB (In-process SQL OLAP)
+* **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM)
 
----
+## 📂 Project Structure
 
-## 🚀 How to Run Locally
-
-### 1. Environment Setup
-```bash
-conda env create -f environment.yaml
-
-conda activate crypto-env
+```text
+.
+├── infra/                  # Terraform Infrastructure code
+│   ├── main.tf             # Resource definitions (Buckets, Functions)
+│   ├── variables.tf        # Input variable declarations
+│   └── terraform.tfvars    # Configuration values (Region, IDs)
+├── src/
+│   ├── cloud_functions/    # Production-ready Cloud Functions
+│   │   └── bronze/         # Ingestion Logic (main.py)
+│   └── bronze/             # Local testing scripts
+├── data/                   # Local data storage (for testing)
+└── README.md
 ```
 
-### 2. Infrastructure (Terraform)
+## 🚀 Deployment Guide
+
+### Prerequisites
+- Google Cloud SDK (gcloud) installed and authenticated.
+- Terraform installed.
+- Python 3.10+ installed.
+
+### 1. Infrastructure Setup
+Navigate to the infrastructure folder and apply the Terraform configuration.
+
 ```bash
 cd infra
 terraform init
+terraform plan
 terraform apply
 ```
 
-### 3. Data Pipeline Execution
-#### Step 1: Ingest Raw Data (Bronze)
+### 2. Manual Trigger (Testing)
+You can manually trigger the ingestion function from the CLI to verify it works:
+
 ```bash
+gcloud functions call bronze-ingest-func \
+  --region=australia-southeast1 \
+  --data='{}'
+```
+
+## 🧪 Local Development
+To run the logic locally without deploying to the cloud:
+
+```bash
+# Activate environment
+source crypto-env/bin/activate
+
+# Run local ingestion script
 python src/bronze/ingest.py
 ```
 
-#### Step 2: Clean & Standardize (Silver)
-```bash
-python src/silver/clean.py
-```
-
-#### Step 3: Analytics & Aggregation (Gold)
-- Downloads Silver data locally.
-- Runs DuckDB SQL Window Functions to calculate volatility and moving averages.
-- Uploads Parquet files to the Gold bucket.
-
-```bash
-python src/gold/aggregate.py
-```
-
-## 📂 Project Structure
-```plaintext
-├── data/                  # Local temp data (ignored by Git)
-├── infra/                 # Terraform Infrastructure as Code
-│   ├── main.tf            # Bucket definitions (Bronze, Silver, Gold)
-│   └── terraform.tfvars   # Project variables
-├── src/
-│   ├── bronze/            # Ingestion Scripts
-│   ├── silver/            # Transformation Scripts
-│   └── gold/              # Aggregation Scripts (DuckDB)
-├── environment.yaml       # Conda Environment Definition
-└── requirements.txt       # Cloud Deployment Dependencies
-```
+## 🛡 Security
+- Service Account: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
+- Region: All resources confined to `australia-southeast1` for data sovereignty.
+- Secrets: No API keys or secrets are committed to the repository.

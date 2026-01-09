@@ -12,6 +12,7 @@ __pycache__/
 *.tfstate.backup
 .terraform.lock.hcl
 *.tfvars
+*.zip
 
 # IDEs
 .vscode/
