@@ -1,12 +1,12 @@
 # ☁️ Crypto Data Platform (GCP + Python + Terraform)
 
-A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform.
+A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Strategy Command Center** for visualization.
 
 ## 🏗 Architecture
 
 **Region:** `australia-southeast1` (Sydney)
 
-The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next.
+The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next, ending in a visualization layer.
 
 1.  **Ingestion (Bronze Layer):**
     * **Source:** CoinGecko API.
@@ -31,12 +31,18 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
     * **Storage:** Google Cloud Storage (Aggregated Parquet).
     * **Function:** `gold-analyze-func`
 
+4.  **Visualization (The Command Center):**
+    * **Tool:** Streamlit (Python-based UI).
+    * **Charts:** Plotly Interactive Graphs.
+    * **Feature:** Connects directly to the Gold Bucket to visualize signals and price trends in real-time.
+
 ## 🛠 Tech Stack
 
 * **Language:** Python 3.10
 * **Infrastructure:** Terraform
 * **Database:** DuckDB (In-process SQL OLAP)
 * **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM, Pub/Sub)
+* **Visualization:** Streamlit, Plotly
 * **Data Format:** JSON (Raw) → Parquet (Analytics)
 
 ## 📂 Project Structure
@@ -53,7 +59,8 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   │   ├── silver/         # Transformation Logic (Event-Driven)
 │   │   └── gold/           # Analytics & Signals Logic (Event-Driven)
 │   ├── bronze/             # Local testing scripts
-│   └── silver/             # Local testing scripts
+│   ├── silver/             # Local testing scripts
+│   └── dashboard.py        # Streamlit Strategy Dashboard
 ├── data/                   # Local data storage (for testing)
 └── README.md
 ```
@@ -87,15 +94,18 @@ gcloud functions call bronze-ingest-func \
   --data='{}'
 ```
 
-### 3. Verification
-Check the final output in the Gold bucket:
+### 3. Verification & Visualization
+To see the results in the Strategy Command Center:
 ```bash
-gcloud storage ls gs://crypto-gold-[PROJECT-ID]/analytics/
+# Authenticate locally to read from GCS
+gcloud auth application-default login
+
+# Launch the Dashboard
+streamlit run src/dashboard.py
 ```
 
 ## 🧪 Local Development
 To run the logic locally without deploying to the cloud:
-
 ```bash
 # Activate environment
 source crypto-env/bin/activate
