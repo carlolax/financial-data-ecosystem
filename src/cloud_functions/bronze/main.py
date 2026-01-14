@@ -1,57 +1,51 @@
-import os
-import json
-import requests
+import functions_framework
 from google.cloud import storage
+import requests
+import json
 from datetime import datetime
+import os
 
-# Setup configuration
-BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
-API_URL = "https://api.coingecko.com/api/v3/simple/price"
-COINS = "bitcoin,ethereum,solana"
+# Setup config
+BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME", "crypto-bronze-crypto-platform-carlo-2026")
 
+@functions_framework.http
 def ingest_bronze(request):
     print(f"Starting Bronze Ingestion at {datetime.now()}")
 
-    # 1. Fetch data
+    # Fetch data from CoinGecko
+    url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
-        "ids": COINS,
+        "ids": "bitcoin,ethereum,solana",
         "vs_currencies": "usd",
         "include_24hr_vol": "true"
     }
 
     try:
-        response = requests.get(API_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
-        print(f"Data fetched successfully from CoinGecko")
-    except Exception as error:
-        print(f"API error: {error}")
-        return f"API error: {error}", 500
-    
-    # 2. Add timestamp (Metadata)
-    data['_metadata'] = {
-        "ingested_at": datetime.now().isoformat(),
-        "source": "coingecko"
-    }
+        response = requests.get(url, params=params)
 
-    # 3. Save to Google Cloud Storage (GCS)
-    try:
+        # Checks if status_code is 400 or 500 and raises an error
+        if response.status_code != 200:
+             response.raise_for_status() 
+
+        data = response.json()
+        print("Data fetched successfully from CoinGecko")
+
+        # Upload to GCS
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
-        # Create a unique filename
-        filename = f"raw_prices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        blob = bucket.blob(filename)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        blob_name = f"raw_prices_{timestamp}.json"
+        blob = bucket.blob(blob_name)
 
-        # Update string content directly
         blob.upload_from_string(
             data=json.dumps(data),
-            content_type='application/json'
+            content_type="application/json"
         )
-        print(f"Uploaded to gs://{BUCKET_NAME}/{filename}")
 
-        return "Ingestion successful", 200
+        print(f"Uploaded to gs://{BUCKET_NAME}/{blob_name}")
+        return f"Success: {blob_name}", 200
 
     except Exception as error:
-        print(f"Storage error: {error}")
-        return f"Storage error: {error}", 500
+        print(f"Error: {error}")
+        raise error

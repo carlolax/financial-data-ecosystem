@@ -12,6 +12,8 @@ dependencies:
     - gcsfs
     - google-cloud-storage
     - pandas
+    - pytest
+    - pytest-mock
     - python-dotenv
     - requests
     - urllib3

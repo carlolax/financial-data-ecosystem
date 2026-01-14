@@ -43,6 +43,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 * **Database:** DuckDB (In-process SQL OLAP)
 * **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM, Pub/Sub)
 * **Visualization:** Streamlit, Plotly
+* **Testing:** Pytest, Mocks (unittest.mock)
 * **Data Format:** JSON (Raw) → Parquet (Analytics)
 
 ## 📂 Project Structure
@@ -61,6 +62,8 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   ├── bronze/             # Local testing scripts
 │   ├── silver/             # Local testing scripts
 │   └── dashboard.py        # Streamlit Strategy Dashboard
+├── tests/                  # Unit Test Suite
+│   └── test_bronze.py      # Bronze Layer Tests (Mocked)
 ├── data/                   # Local data storage (for testing)
 └── README.md
 ```
@@ -104,6 +107,16 @@ gcloud auth application-default login
 streamlit run src/dashboard.py
 ```
 
+## Unit Testing
+The project includes a robust test suite using `pytest` and `mocks` to verify logic without incurring cloud costs or hitting API rate limits.
+```bash
+# Set Python Path (Important for imports)
+export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+
+# Run all tests with verbose output
+python -m pytest tests/ -v
+```
+
 ## 🧪 Local Development
 To run the logic locally without deploying to the cloud:
 ```bash
@@ -124,4 +137,5 @@ python src/gold/analyze.py
 - **Service Account**: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
 - **Data Sovereignity**: All resources confined to `australia-southeast1`.
 - **Secrets**: No API keys committed to the repository.
+- **Circuit Breaker**: API ingestion includes error handling to halt pipeline on 4xx/5xx errors.
 - **Schema Enforcement**: Strict typing in DuckDB prevents pipeline crashes from bad API data.
