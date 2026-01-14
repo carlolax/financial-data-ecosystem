@@ -63,7 +63,8 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   ├── silver/             # Local testing scripts
 │   └── dashboard.py        # Streamlit Strategy Dashboard
 ├── tests/                  # Unit Test Suite
-│   └── test_bronze.py      # Bronze Layer Tests (Mocked)
+│   ├── test_bronze.py      # Bronze Layer Tests (Mocked API)
+│   └── test_silver.py      # Silver Layer Tests (Mocked GCS + Real DuckDB)
 ├── data/                   # Local data storage (for testing)
 └── README.md
 ```
@@ -107,7 +108,7 @@ gcloud auth application-default login
 streamlit run src/dashboard.py
 ```
 
-## Unit Testing
+## 🧪 Unit Testing
 The project includes a robust test suite using `pytest` and `mocks` to verify logic without incurring cloud costs or hitting API rate limits.
 ```bash
 # Set Python Path (Important for imports)

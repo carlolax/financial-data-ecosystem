@@ -33,11 +33,11 @@ def test_ingest_bronze_success(mocker):
     # Drill down to the blob. This mocks the entire chain: storage.Client().bucket().blob()
     mock_blob = mock_storage.Client.return_value.bucket.return_value.blob.return_value
 
-    # EXECUTE    
+    # EXECUTE:
     # Run the actual function
     ingest_bronze(mocker.Mock())
 
-    # ASERT
+    # ASSERT:
     # Check that it was called with 'params', not just a long URL string
     mock_requests.get.assert_called_once_with(
         "https://api.coingecko.com/api/v3/simple/price",
@@ -47,7 +47,7 @@ def test_ingest_bronze_success(mocker):
             "include_24hr_vol": "true"
         }
     )
-    
+
     mock_blob.upload_from_string.assert_called_once()
 
 # Test 2
@@ -66,5 +66,5 @@ def test_ingest_bronze_api_failure(mocker):
     # Run function and expect it to fail
     with pytest.raises(Exception) as excinfo:
         ingest_bronze(mocker.Mock())
-    
+
     assert "Failed to fetch data" in str(excinfo.value)
