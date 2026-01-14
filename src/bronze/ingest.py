@@ -1,56 +1,68 @@
+import os
 import requests
 import json
 from datetime import datetime
-from google.cloud import storage
+from dotenv import load_dotenv
+from pathlib import Path
 
-# Setup config
-BUCKET_NAME = "crypto-lake-carlo-2026-v1" 
-COINS = ["bitcoin", "ethereum", "solana"]
-COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
+# SETUP:
+# Load variables from .env file into the environment
+load_dotenv()
 
-def fetch_prices():
-    coingecko_params = {
-        "ids": ",".join(COINS),
+# Calculates the project root: /Users/<NAME>/Developer/crypto-project/
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Directory that points to: /Users/<NAME>/Developer/crypto-project/data/bronze
+DATA_DIR = BASE_DIR / "data" / "bronze"
+
+# CONFIGURATION:
+# Define the CoinGecko URL as a constant
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
+
+# Check .env for specific coins, otherwise, it will use the default list
+env_coins = os.getenv("COINS_TO_FETCH")
+TARGET_COINS = env_coins if env_coins else "bitcoin,ethereum,solana"
+
+# Main function
+def ingest_bronze_local():
+    print(f"Starting Bronze Layer Ingestion.")
+    print(f"  Target Coins: {TARGET_COINS}")
+
+    # Creates the directory automatically
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Parameters that will be only extracted from CoinGecko API
+    params = {
+        "ids": TARGET_COINS,
         "vs_currencies": "usd",
-        "include_market_cap": "true",
-        "include_24hr_vol": "true",
-        "include_24hr_change": "true"
+        "include_24hr_vol": "true"
     }
 
+    # Attempt to request on getting the data from CoinGecko, if it fails, it will show an error message
     try:
-        response = requests.get(COINGECKO_URL, params=coingecko_params)
+        response = requests.get(COINGECKO_API_URL, params=params)
         response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as request_error:
-        print(f"API Error: {request_error}")
-        return None
+        
+        # Variable for storing the response as JSON
+        coingecko_api_data = response.json()
+        print("CoinGecko data was fetched successfully.")
 
-def upload_to_gcs(data, bucket_name):
-    # Create a filename with a timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    filename = f"raw_data/prices_{timestamp}.json"
+        # Timestamp (format as YYYYMMDD_HHMMSS) to add as metadata on filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"raw_prices_{timestamp}.json"
 
-    # Connect to the client
-    storage_client = storage.Client()
-    client_bucket = storage_client.bucket(bucket_name)
-    blob = client_bucket.blob(filename)
+        # Variable on where to store the JSON file
+        file_path = DATA_DIR / filename
 
-    # Upload the data
-    blob.upload_from_string(
-        data=json.dumps(data, indent=4),
-        content_type="application/json"
-    )
+        # Stored the extracted data to a JSON file
+        with open(file_path, "w") as f:
+            json.dump(coingecko_api_data, f, indent=4)
 
-    print(f"Data uploaded to: gs://{bucket_name}/{filename}")
+        print(f"Saved to: {file_path}")
 
+    except Exception as error:
+        print(f"Error: {error}")
+ 
+# Entry point for running the bronze layer (ingestion) locally
 if __name__ == "__main__":
-    print(f"Starting ingestion process.")
-    price_data = fetch_prices()
-
-    if price_data:
-        try:
-            upload_to_gcs(price_data, BUCKET_NAME)
-        except Exception as upload_error:
-            print(f"Error uploading to GCS: {upload_error}")
-    else:
-        print("No data to save.")
+    ingest_bronze_local()
