@@ -3,36 +3,37 @@ from google.cloud import storage
 import duckdb
 import os
 
-# Setup configuration
+# Setup config
 SILVER_BUCKET_NAME = os.environ.get("SILVER_BUCKET_NAME", "crypto-silver-REPLACE-ME")
 
 @functions_framework.cloud_event
 def process_silver(cloud_event):
     data = cloud_event.data
 
-    # 1. Get Event Details
+    # Get event details
     file_name = data["name"]
     source_bucket_name = data["bucket"]
     
-    print(f"Event Triggered! Source: gs://{source_bucket_name}/{file_name}")
+    print(f"Event triggered! Source: gs://{source_bucket_name}/{file_name}")
 
     # Safety Check: Ignore folders or non-json files
     if not file_name.endswith(".json"):
         print("Not a JSON file. Skipping.")
         return
     
-    # 2. Download (Input)
+    # Download (Input)
     storage_client = storage.Client()
     source_bucket = storage_client.bucket(source_bucket_name)
     source_blob = source_bucket.blob(file_name)
     
     local_input_path = f"/tmp/{file_name}"
+    # Change extension from .json to .parquet
     local_output_path = f"/tmp/{file_name.replace('.json', '.parquet')}"
     
     source_blob.download_to_filename(local_input_path)
     print(f"Downloaded to {local_input_path}")
 
-    # 3. Transform (DuckDB Logic)
+    # Transform (DuckDB Logic)
     con = duckdb.connect()
 
     query = f"""
@@ -56,7 +57,7 @@ def process_silver(cloud_event):
                     strptime(
                         regexp_extract(filename, 'raw_prices_(\\d{{8}}_\\d{{6}})', 1),
                         '%Y%m%d_%H%M%S'
-                    ) as recorded_at,
+                    ) as extraction_timestamp,  -- <--- from 'recorded_at', change it to 'extraction_timestamp' to match Gold Layer
                     coin_id,
                     CAST(metrics.usd AS DECIMAL(18, 2)) as price_usd,
                     CAST(metrics.usd_market_cap AS DECIMAL(24, 2)) as market_cap,
@@ -70,9 +71,10 @@ def process_silver(cloud_event):
         print(f"Transformation Complete. Saved to {local_output_path}")
     except Exception as error:
         print(f"DuckDB Error: {error}")
+        if os.path.exists(local_input_path): os.remove(local_input_path)
         raise error
 
-    # 4. Upload (Output)
+    # Upload (Output)
     dest_bucket = storage_client.bucket(SILVER_BUCKET_NAME)
 
     # Strip any existing folders from the input filename
@@ -87,6 +89,7 @@ def process_silver(cloud_event):
     print(f"Uploaded to gs://{SILVER_BUCKET_NAME}/{dest_blob_name}")
 
     # Cleanup /tmp to free up memory
-    os.remove(local_input_path)
-    os.remove(local_output_path)
+    if os.path.exists(local_input_path): os.remove(local_input_path)
+    if os.path.exists(local_output_path): os.remove(local_output_path)
     print("Cleanup complete.")
+    

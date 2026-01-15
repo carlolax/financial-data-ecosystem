@@ -21,7 +21,7 @@ def ingest_bronze(request):
     }
 
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=10)
 
         # Checks if status_code is 400 or 500 and raises an error
         if response.status_code != 200:
@@ -49,3 +49,4 @@ def ingest_bronze(request):
     except Exception as error:
         print(f"Error: {error}")
         raise error
+    
