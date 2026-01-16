@@ -5,64 +5,69 @@ from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
 
-# SETUP:
-# Load variables from .env file into the environment
+# --- SETUP ---
 load_dotenv()
-
-# Calculates the project root by going up 4 levels: 1. bronze -> 2. pipeline -> 3. src -> 4. crypto-project
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-
-# Directory that points to: /Users/<NAME>/Developer/crypto-project/data/bronze/
 DATA_DIR = BASE_DIR / "data" / "bronze"
 
-# CONFIGURATION:
-# Define the CoinGecko URL as a constant
+# --- CONSTANTS ---
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
+# Default to a safe list if env is missing
+TARGET_COINS = os.getenv("COINS_TO_FETCH", "bitcoin,ethereum,solana,cardano")
 
-# Check .env for specific coins, otherwise, it will use the default list
-env_coins = os.getenv("COINS_TO_FETCH")
-TARGET_COINS = env_coins if env_coins else "bitcoin,ethereum,solana,cardano"
+def process_data_ingestion() -> Path:
+    """
+    Fetches current crypto prices from CoinGecko and saves them as a raw JSON file.
 
-# Main function
-def ingest_bronze_local():
-    print(f"Starting Bronze Layer Ingesting.")
-    print(f"  Target Coins: {TARGET_COINS}")
+    Process:
+    1. Reads the list of target coins from the environment (TARGET_COINS).
+    2. Requests real-time price and volume data from the CoinGecko API.
+    3. Generates a timestamped filename (e.g., raw_prices_20260116.json).
+    4. Saves the raw JSON response to 'data/bronze/'.
 
-    # Creates the directory automatically
+    Returns:
+        Path: The absolute path to the saved JSON file.
+
+    Raises:
+        requests.HTTPError: If the API call fails.
+        IOError: If the file cannot be written.
+    """
+    print(f"🚀 Starting Bronze Layer - Data Ingestion for: {TARGET_COINS}")
+    
+    # Ensure data/bronze directory exists
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # Parameters to send to the CoinGecko API (filtering for specific IDs)
     params = {
         "ids": TARGET_COINS,
         "vs_currencies": "usd",
         "include_24hr_vol": "true"
     }
 
-    # Attempt to request on getting the data from CoinGecko, if it fails, it will show an error message
     try:
-        response = requests.get(COINGECKO_API_URL, params=params)
-        response.raise_for_status()
+        response = requests.get(COINGECKO_API_URL, params=params, timeout=10) # Added timeout
+        response.raise_for_status() # Raises error for 404, 500, etc.
         
-        # Variable for storing the response as JSON
-        coingecko_api_data = response.json()
-        print("CoinGecko data was fetched successfully.")
+        coingecko_data = response.json()
+        print("✅ CoinGecko data fetched successfully.")
 
-        # Timestamp (format as YYYYMMDD_HHMMSS) to add as metadata on filename
+        # Generate filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"raw_prices_{timestamp}.json"
-
-        # Variable on where to store the JSON file
         file_path = DATA_DIR / filename
 
-        # Stored the extracted data to a JSON file
-        with open(file_path, "w") as f:
-            json.dump(coingecko_api_data, f, indent=4)
+        # Save to disk
+        with open(file_path, "w") as json_file:
+            json.dump(coingecko_data, json_file, indent=4)
 
-        print(f"Saved to: {file_path}")
+        print(f"💾 Ingested data was saved to: {file_path}")
+        
+        return file_path # Return the path for other scripts to use it
 
     except Exception as error:
-        print(f"Error: {error}")
+        print(f"❌ Critical error in Bronze Layer: {error}")
+        # Re-raise the error to stop the pipeline
+        raise error
  
-# Entry point for running the bronze layer (ingestion) locally
+# Entry point for running the bronze layer (data ingestion) locally
 if __name__ == "__main__":
-    ingest_bronze_local()
+    process_data_ingestion()

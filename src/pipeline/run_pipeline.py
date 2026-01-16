@@ -1,44 +1,41 @@
-import subprocess
 import sys
 from pathlib import Path
 
-# SETUP:
-# Calculates the project root: /Users/<NAME>/Developer/crypto-project/src/pipeline/
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# --- SETUP ---
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
-# Directory that points to: /Users/<NAME>/Developer/crypto-project/src/pipeline/
-PIPELINE_DIR = BASE_DIR / "src" / "pipeline"
+# --- IMPORTS ---
+from src.pipeline.bronze.ingest import process_data_ingestion
+from src.pipeline.silver.clean import process_data_cleaning
+from src.pipeline.gold.analyze import process_data_analytics
 
-def run_step(step_name, script_path):
-    # Runs a single Python script and check for errors
-    print(f"--------- Starting {step_name} ---------")
+def run_pipeline():
+    """
+    Orchestrates the local data pipeline: Bronze -> Silver -> Gold.
+    """
+    print(f"🚀 Initializing Crypto Data Pipeline from: {PROJECT_ROOT}\n")
 
-    # Attempt to run the pipeline's automation, if it fails, it will show an error message
     try:
-        # Run the script using the current Python interpreter
-        result = subprocess.run(
-            [sys.executable, str(script_path)], 
-            check=True,  # Raises error if script fails
-            capture_output=False # Print statements show in terminal
-        )
-        print(f"--------- {step_name} Completed ---------\n")
+        # --- STEP 1: BRONZE (Data Ingest) ---
+        raw_file = process_data_ingestion()
+        print(f"✅ [Bronze] Ingestion Complete. Raw file: {raw_file.name}\n")
 
-    except subprocess.CalledProcessError as called_process_error:
-        print(f"--------- {step_name} Failed ---------\n")
-        print(f"Error code: {called_process_error.returncode}")
-        sys.exit(1) # Stops the entire pipeline
+        # --- STEP 2: SILVER (Data Clean) ---
+        clean_file = process_data_cleaning()
+        print(f"✅ [Silver] Transformation Complete. Parquet file: {clean_file.name}\n")
+
+        # --- STEP 3: GOLD (Data Analyze) ---
+        final_report = process_data_analytics()
+        print(f"✅ [Gold] Analysis Complete. Report: {final_report.name}\n")
+
+        print("🎉 Pipeline Finished Successfully. Data is ready for the Dashboard Visualization.")
+
+    except Exception as error:
+        # This catches any 'errors' from the steps above
+        print(f"\n❌ Pipeline Failed during execution: {error}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    print(f"Project Root: {BASE_DIR}")
-    print("Initializing Data Pipeline.\n")
-
-    # Runs the bronze layer code logic for extracting data
-    run_step("Bronze Layer (Ingestion)", PIPELINE_DIR / "bronze" / "ingest.py")
-
-    # Runs the silver layer code logic for cleaning data
-    run_step("Silver Layer (Transformation)", PIPELINE_DIR / "silver" / "clean.py")
-
-    # Runs the gold layer code logic for analyzing data
-    run_step("Gold Layer (Analytics)", PIPELINE_DIR / "gold" / "analyze.py")
-
-    print("Pipeline run successfully.")
+    run_pipeline()
+    
