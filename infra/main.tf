@@ -19,18 +19,19 @@ resource "google_project_iam_member" "runner_storage_admin" {
 
 # --- BRONZE LAYER (Raw Data) ---
 resource "google_storage_bucket" "data_lake" {
-  name                     = var.bucket_name
+  name                     = var.bronze_bucket_name
   location                 = var.region
   force_destroy            = true
   storage_class            = "STANDARD"
   public_access_prevention = "enforced"
+  uniform_bucket_level_access = true
   
   versioning { enabled = true }
 }
 
 # --- SILVER LAYER (Clean Data) ---
 resource "google_storage_bucket" "silver_layer" {
-  name                     = "crypto-silver-${var.project_id}"
+  name                     = var.silver_bucket_name 
   location                 = var.region
   force_destroy            = true
   storage_class            = "STANDARD"
@@ -47,7 +48,7 @@ resource "google_storage_bucket" "silver_layer" {
 
 # --- GOLD LAYER (Analyze Data) ---
 resource "google_storage_bucket" "gold_layer" {
-  name                     = "crypto-gold-${var.project_id}"
+  name                     = var.gold_bucket_name
   location                 = var.region
   force_destroy            = true
   storage_class            = "STANDARD"
@@ -67,32 +68,32 @@ resource "google_storage_bucket" "gold_layer" {
 # ==========================================
 
 resource "google_storage_bucket" "function_source" {
-  name                        = "${var.project_id}-function-source"
+  name                        = "cdp-function-source"
   location                    = var.region
   force_destroy               = true
   uniform_bucket_level_access = true
 }
 
-data "archive_file" "bronze_zip" {
+data "archive_file" "bronze_layer_zip" {
   type        = "zip"
   source_dir  = "${path.module}/../src/cloud_functions/bronze"
-  output_path = "${path.module}/bronze_function.zip"
+  output_path = "${path.module}/bronze_layer_function.zip"
 }
 
-resource "google_storage_bucket_object" "bronze_zip_upload" {
-  name   = "bronze-ingest-${data.archive_file.bronze_zip.output_md5}.zip"
+resource "google_storage_bucket_object" "bronze_layer_zip_upload" {
+  name   = "bronze-ingesting-${data.archive_file.bronze_layer_zip.output_md5}.zip"
   bucket = google_storage_bucket.function_source.name
-  source = data.archive_file.bronze_zip.output_path
+  source = data.archive_file.bronze_layer_zip.output_path
 }
 
 resource "google_cloudfunctions_function" "bronze_ingest" {
-  name        = "bronze-ingest-func"
+  name        = "bronze-ingesting-func"
   description = "Ingests Crypto Data to Bronze Bucket"
   runtime     = "python310"
 
   available_memory_mb   = 256
   source_archive_bucket = google_storage_bucket.function_source.name
-  source_archive_object = google_storage_bucket_object.bronze_zip_upload.name
+  source_archive_object = google_storage_bucket_object.bronze_layer_zip_upload.name
   trigger_http          = true
   entry_point           = "process_data_ingestion"
   
@@ -115,6 +116,7 @@ resource "google_cloud_scheduler_job" "daily_bronze_trigger" {
     
     oidc_token {
       service_account_email = google_service_account.function_runner.email
+      audience              = google_cloudfunctions_function.bronze_ingest.https_trigger_url
     }
   }
 }
@@ -124,21 +126,21 @@ resource "google_cloud_scheduler_job" "daily_bronze_trigger" {
 # ==============================================================================
 
 # 1. Zip the Silver Source Code
-data "archive_file" "silver_zip" {
+data "archive_file" "silver_layer_zip" {
   type        = "zip"
   source_dir  = "${path.module}/../src/cloud_functions/silver"
-  output_path = "${path.module}/silver_function.zip"
+  output_path = "${path.module}/silver_layer_function.zip"
 }
 
 # 2. Upload Zip to Source Bucket
-resource "google_storage_bucket_object" "silver_zip_upload" {
-  name   = "silver-cleaning-${data.archive_file.silver_zip.output_md5}.zip"
+resource "google_storage_bucket_object" "silver_layer_zip_upload" {
+  name   = "silver-cleaning-${data.archive_file.silver_layer_zip.output_md5}.zip"
   bucket = google_storage_bucket.function_source.name
-  source = data.archive_file.silver_zip.output_path
+  source = data.archive_file.silver_layer_zip.output_path
 }
 
 # 3. The Silver Cloud Function
-resource "google_cloudfunctions_function" "silver_cleaning" {
+resource "google_cloudfunctions_function" "silver_clean" {
   name        = "silver-cleaning-func"
   description = "Event-driven: Clean Bronze JSON to Silver Parquet"
   runtime     = "python310"
@@ -147,7 +149,7 @@ resource "google_cloudfunctions_function" "silver_cleaning" {
 
   available_memory_mb   = 512 
   source_archive_bucket = google_storage_bucket.function_source.name
-  source_archive_object = google_storage_bucket_object.silver_zip_upload.name
+  source_archive_object = google_storage_bucket_object.silver_layer_zip_upload.name
 
   entry_point           = "process_data_cleaning"
   service_account_email = google_service_account.function_runner.email
@@ -163,26 +165,26 @@ resource "google_cloudfunctions_function" "silver_cleaning" {
 }
 
 # ==============================================================================
-# GOLD LAYER: ANALYTICS FUNCTION
+# GOLD LAYER: ANALYZE FUNCTION
 # ==============================================================================
 
 # 1. Zip the Gold Source Code
-data "archive_file" "gold_zip" {
+data "archive_file" "gold_layer_zip" {
   type        = "zip"
   source_dir  = "${path.module}/../src/cloud_functions/gold"
-  output_path = "${path.module}/gold_function.zip"
+  output_path = "${path.module}/gold_layer_function.zip"
 }
 
 # 2. Upload Zip to Source Bucket
-resource "google_storage_bucket_object" "gold_zip_upload" {
-  name   = "gold-analyze-${data.archive_file.gold_zip.output_md5}.zip"
+resource "google_storage_bucket_object" "gold_layer_zip_upload" {
+  name   = "gold-analyzing-${data.archive_file.gold_layer_zip.output_md5}.zip"
   bucket = google_storage_bucket.function_source.name
-  source = data.archive_file.gold_zip.output_path
+  source = data.archive_file.gold_layer_zip.output_path
 }
 
 # 3. The Gold Cloud Function
 resource "google_cloudfunctions_function" "gold_analyze" {
-  name        = "gold-analyze-func"
+  name        = "gold-analyzing-func"
   description = "Event-driven: Analyze Market Signals"
   runtime     = "python310"
   region      = var.region
@@ -190,9 +192,9 @@ resource "google_cloudfunctions_function" "gold_analyze" {
 
   available_memory_mb   = 512 
   source_archive_bucket = google_storage_bucket.function_source.name
-  source_archive_object = google_storage_bucket_object.gold_zip_upload.name
+  source_archive_object = google_storage_bucket_object.gold_layer_zip_upload.name
 
-  entry_point           = "process_data_analytics"
+  entry_point           = "process_data_analyzing"
   service_account_email = google_service_account.function_runner.email
 
   event_trigger {

@@ -1,15 +1,25 @@
 variable "project_id" {
-  description = "The ID of the Google Cloud Project"
+  description = "The Google Cloud Project ID"
   type        = string
 }
 
 variable "region" {
-  description = "The Google Cloud region (e.g., australia-southeast1)"
+  description = "The GCP region"
   type        = string
-  default     = "australia-southeast1"
+  default     = "us-central1"
 }
 
-variable "bucket_name" {
-  description = "The name of the GCS bucket"
+variable "bronze_bucket_name" {
+  description = "Name of the Bronze bucket"
+  type        = string
+}
+
+variable "silver_bucket_name" {
+  description = "Name of the Silver bucket"
+  type        = string
+}
+
+variable "gold_bucket_name" {
+  description = "Name of the Gold bucket"
   type        = string
 }
