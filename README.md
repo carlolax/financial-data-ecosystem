@@ -107,7 +107,7 @@ gcloud auth application-default login
 # Launch the Dashboard
 streamlit run src/dashboard.py
 ```
-*Note: Ensure the `DATA_SOURCE` variable in `dashboard.py` is set to "CLOUD" to visualize live data.*
+*Note: Use the **"Data Source"** toggle in the sidebar to switch between `CLOUD` (Live) and `LOCAL` (Dev) modes instantly.*
 
 ## 🧪 Local Development
 To run the logic locally without deploying to the cloud:
