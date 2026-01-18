@@ -10,7 +10,7 @@ GOLD_BUCKET_NAME = os.environ.get("GOLD_BUCKET_NAME", "crypto-gold-data")
 WINDOW_SIZE = 7
 
 @functions_framework.cloud_event
-def process_data_analytics(cloud_event):
+def process_data_analyzing(cloud_event):
     """
     Event-Driven Cloud Function that recalculates market analytics.
 
