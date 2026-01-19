@@ -1,27 +1,27 @@
-variable "project_id" {
-  description = "The Google Cloud Project ID"
-  type        = string
-}
-
-variable "region" {
-  description = "The GCP region"
-  type        = string
-  default     = "us-central1"
-}
-
 variable "bronze_bucket_name" {
-  description = "Name of the Bronze bucket"
   type        = string
+  description = "Name of the Bronze bucket"
+  default     = "cdp-bronze-ingest-bucket"
 }
 
 variable "silver_bucket_name" {
-  description = "Name of the Silver bucket"
   type        = string
+  description = "Name of the Silver bucket"
+  default     = "cdp-silver-clean-bucket"
 }
 
 variable "gold_bucket_name" {
-  description = "Name of the Gold bucket"
   type        = string
+  description = "Name of the Gold bucket"
+  default     = "cdp-gold-analyze-bucket"
 }
 
-# TRIGGER: Testing GitHub Actions
+variable "project_id" {
+  description = "The GCP Project ID"
+  default     = "crypto-data-platform"
+}
+
+variable "region" {
+  description = "GCP Region"
+  default     = "us-central1"
+}
