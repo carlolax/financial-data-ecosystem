@@ -1,5 +1,7 @@
 # ☁️ Crypto Data Platform (GCP + Python + Terraform)
 
+![Build Status](https://github.com/carlolax/crypto-data-platform/actions/workflows/deploy.yml/badge.svg)
+
 A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization.
 
 ## 🏗 Architecture
@@ -74,15 +76,27 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 └── README.md
 ```
 
-## 🚀 Deployment Guide
+## ⚙️ CI/CD Automation
+This project uses GitHub Actions to automate the infrastructure deployment, ensuring a "GitOps" workflow where code changes automatically reflect in the cloud.
 
-### Prerequisites
+- **Workflow**: `.github/workflows/deploy.yml`
+- **Trigger**: Pushes to the `main` branch (specifically for `infra/` or `src/cloud_functions/`).
+- **Operations**:
+    1. Setup: Authenticates via Workload Identity (Service Account Key).
+    2. Lint: Runs `terraform fmt` to ensure code quality.
+    3. Deploy: Runs `terraform apply` to update Google Cloud resources.
+    4. State Management: Terraform State is stored remotely in a GCS Bucket (`gs://cdp-tf-state...`) to allow team collaboration and persistence.
+
+## 🚀 Deployment Guide
+**Prerequisites**
 - Google Cloud SDK (gcloud) installed and authenticated.
 - Terraform installed.
 - Python 3.10+ installed.
 
 ### 1. Infrastructure Setup
-Navigate to the infrastructure folder and apply the Terraform configuration.
+**Option A: Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
+
+**Option B: Manual (Dev/Debug)** Navigate to the infrastructure folder and apply the Terraform configuration manually.
 ```bash
 cd infra
 terraform init
@@ -129,3 +143,4 @@ python src/pipeline/gold/analyze.py
 - **Service Account**: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
 - **Idempotency**: All functions are designed to run multiple times without corrupting data (Overwrite logic).
 - **Schema Enforcement**: Strict typing in DuckDB prevents pipeline crashes from bad API data.
+- **Secret Management**: Sensitive keys are stored in GitHub Secrets and never committed to the repository.
