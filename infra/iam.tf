@@ -9,6 +9,6 @@ resource "google_service_account" "function_runner" {
 
 resource "google_project_iam_member" "runner_storage_admin" {
   project = var.project_id
-  role    = "roles/storage.admin" 
+  role    = "roles/storage.admin"
   member  = "serviceAccount:${google_service_account.function_runner.email}"
 }

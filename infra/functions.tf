@@ -28,7 +28,7 @@ resource "google_cloudfunctions_function" "bronze_ingest" {
   source_archive_object = google_storage_bucket_object.bronze_layer_zip_upload.name
   trigger_http          = true
   entry_point           = "process_data_ingestion"
-  
+
   service_account_email = google_service_account.function_runner.email
 
   environment_variables = {
@@ -65,7 +65,7 @@ resource "google_cloudfunctions_function" "silver_clean" {
   service_account_email = google_service_account.function_runner.email
 
   event_trigger {
-    event_type = "google.storage.object.finalize" 
+    event_type = "google.storage.object.finalize"
     resource   = google_storage_bucket.data_lake.name
   }
 
@@ -103,7 +103,7 @@ resource "google_cloudfunctions_function" "gold_analyze" {
   service_account_email = google_service_account.function_runner.email
 
   event_trigger {
-    event_type = "google.storage.object.finalize" 
+    event_type = "google.storage.object.finalize"
     resource   = google_storage_bucket.silver_layer.name
   }
 

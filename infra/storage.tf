@@ -18,13 +18,13 @@ resource "google_storage_bucket" "data_lake" {
   storage_class               = "STANDARD"
   public_access_prevention    = "enforced"
   uniform_bucket_level_access = true
-  
+
   versioning { enabled = true }
 }
 
 # --- SILVER LAYER (Clean Data) ---
 resource "google_storage_bucket" "silver_layer" {
-  name                        = var.silver_bucket_name 
+  name                        = var.silver_bucket_name
   location                    = var.region
   force_destroy               = true
   storage_class               = "STANDARD"

@@ -12,7 +12,7 @@ terraform {
   }
 
   backend "gcs" {
-    bucket  = "cdp-terraform-status"
-    prefix  = "terraform/status"
+    bucket = "cdp-terraform-status"
+    prefix = "terraform/status"
   }
 }

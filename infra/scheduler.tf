@@ -9,7 +9,7 @@ resource "google_cloud_scheduler_job" "daily_bronze_trigger" {
   http_target {
     http_method = "POST"
     uri         = google_cloudfunctions_function.bronze_ingest.https_trigger_url
-    
+
     oidc_token {
       service_account_email = google_service_account.function_runner.email
       audience              = google_cloudfunctions_function.bronze_ingest.https_trigger_url
