@@ -1,3 +1,8 @@
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
 terraform {
   required_providers {
     google = {
@@ -5,9 +10,9 @@ terraform {
       version = ">= 4.51.0"
     }
   }
-}
 
-provider "google" {
-  project = var.project_id
-  region  = var.region
+  backend "gcs" {
+    bucket  = "cdp-terraform-status"
+    prefix  = "terraform/status"
+  }
 }
