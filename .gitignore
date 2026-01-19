@@ -18,3 +18,11 @@ __pycache__/
 # IDEs
 .vscode/
 .idea/
+
+# Flat files
+*.json
+*.csv
+*.parquet
+
+# Google Cloud
+gcp-key.json
