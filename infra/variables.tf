@@ -23,3 +23,5 @@ variable "gold_bucket_name" {
   description = "Name of the Gold bucket"
   type        = string
 }
+
+# TRIGGER: Testing GitHub Actions
