@@ -1,6 +1,8 @@
 import os
 import requests
 import json
+import time
+import math
 from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
@@ -11,62 +13,85 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 DATA_DIR = BASE_DIR / "data" / "bronze"
 
 # --- CONSTANTS ---
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3/simple/price"
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
+BATCH_INGESTION_SIZE = 50
+RATE_LIMIT_SLEEP = 5
+
 # Default to a safe list if env is missing
-TARGET_COINS = os.getenv("COINS_TO_FETCH", "bitcoin,ethereum,solana,cardano")
+DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
+TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
 
-def process_data_ingestion() -> Path:
-    """
-    Fetches current crypto prices from CoinGecko and saves them as a raw JSON file.
-
-    Process:
-    1. Reads the list of target coins from the environment (TARGET_COINS).
-    2. Requests real-time price and volume data from the CoinGecko API.
-    3. Generates a timestamped filename (e.g., raw_prices_20260116.json).
-    4. Saves the raw JSON response to 'data/bronze/'.
-
-    Returns:
-        Path: The absolute path to the saved JSON file.
-
-    Raises:
-        requests.HTTPError: If the API call fails.
-        IOError: If the file cannot be written.
-    """
-    print(f"🚀 Starting Bronze Layer - Data Ingestion for: {TARGET_COINS}")
-    
-    # Ensure data/bronze directory exists
-    os.makedirs(DATA_DIR, exist_ok=True)
-
+def fetch_batch(coin_ids: list) -> list:
+    # Helper to fetch a specific list of IDs from the API.
     params = {
-        "ids": TARGET_COINS,
-        "vs_currencies": "usd",
-        "include_24hr_vol": "true"
+        "vs_currency": "usd",
+        "ids": ",".join(coin_ids),
+        "order": "market_cap_desc",
+        "per_page": 250,
+        "page": 1,
+        "sparkline": "false",
+        "price_change_percentage": "1h,24h,7d",
+        "locale": "en"
     }
 
-    try:
-        response = requests.get(COINGECKO_API_URL, params=params, timeout=10) # Added timeout
-        response.raise_for_status() # Raises error for 404, 500, etc.
-        
-        coingecko_data = response.json()
-        print("✅ CoinGecko data fetched successfully.")
+    coingecko_response = requests.get(COINGECKO_API_URL, params=params, timeout=10)
 
-        # Generate filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"raw_prices_{timestamp}.json"
-        file_path = DATA_DIR / filename
+    if coingecko_response.status_code == 429:
+        raise Exception("🚨 Rate limit hits (429). Ingestion is going too fast.")
 
-        # Save to disk
-        with open(file_path, "w") as json_file:
-            json.dump(coingecko_data, json_file, indent=4)
+    coingecko_response.raise_for_status()
+    return coingecko_response.json()
 
-        print(f"💾 Ingested data was saved to: {file_path}")
-        
-        return file_path # Return the path for other scripts to use it
+def process_data_ingestion() -> Path:
+    # Ingests market data in batches to respect API limits.
+    print(f"🚀 Starting Bronze Layer - Batch Ingestion")
 
-    except Exception as error:
-        print(f"❌ Critical error in Bronze Layer: {error}")
-        # Re-raise the error to stop the pipeline
-        raise error
+    # Prepare the list
+    crypto_coin_list = [crypto_coin.strip() for crypto_coin in TARGET_CRYPTO_COINS.split(",")]
+    total_crypto_coins = len(crypto_coin_list)
+
+    # Calculate the total chunks so we can log "Batch 1 of 5"
+    total_ingestion_batches = math.ceil(total_crypto_coins / BATCH_INGESTION_SIZE)
+
+    print(f"📋 Total Cryptocurrency Coins: {total_crypto_coins} | Total Ingestion Batches: {total_ingestion_batches}")
+
+    # Ensure data/bronze directory exists
+    os.makedirs(DATA_DIR, exist_ok=True)
+    all_market_data = []
+
+    # Loop through in chunks
+    for crypto_index in range(0, total_crypto_coins, BATCH_INGESTION_SIZE):
+        batch = crypto_coin_list[crypto_index : crypto_index + BATCH_INGESTION_SIZE]
+        current_batch_count = (crypto_index // BATCH_INGESTION_SIZE) + 1
+
+        print(f"🔄 Fetching batch {current_batch_count} of {total_ingestion_batches} ({len(batch)} coins).")
+
+        try:
+            batch_data = fetch_batch(batch)
+            all_market_data.extend(batch_data)
+            print(f"✅ Success. Got {len(batch_data)} records.")
+
+            # Pause execution to prevent hitting the API's rate limit (429 errors)
+            if current_batch_count < total_ingestion_batches:
+                print(f"😴 Rate Limit Sleep: {RATE_LIMIT_SLEEP}s to respect API limits.")
+                time.sleep(RATE_LIMIT_SLEEP)
+
+        except Exception as error:
+            print(f"❌ Error fetching batch: {error}")
+            raise error
+
+    # Save combined data
+    print(f"📦 Total records collected: {len(all_market_data)}")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"raw_prices_{timestamp}.json"
+    file_path = DATA_DIR / filename
+
+    with open(file_path, "w") as json_file:
+        json.dump(all_market_data, json_file, indent=4)
+
+    print(f"💾 Ingested rich data saved to: {file_path}")
+    return file_path
  
 # Entry point for running the bronze layer (data ingestion) locally
 if __name__ == "__main__":
