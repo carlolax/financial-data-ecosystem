@@ -11,7 +11,11 @@ A serverless, event-driven data engineering platform that ingests, processes, an
 The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next.
 
 1.  **Ingestion (Bronze Layer):**
-    * **Source:** CoinGecko API.
+    * **Source:** CoinGecko API (`/coins/markets` endpoint).
+    * **Features:**
+        * **Rich Data:** Captures ATH, Circulating Supply, High/Low 24h, and Market Cap Rank.
+        * **Smart Batching:** Automatically splits large coin lists into chunks to ensure scalability.
+        * **Rate Limiting:** Built-in throttling to respect API limits (prevents 429 errors).
     * **Compute:** Google Cloud Function (Python 3.10).
     * **Trigger:** Cloud Scheduler (Daily cron job).
     * **Storage:** Google Cloud Storage (Raw JSON).
