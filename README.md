@@ -24,8 +24,11 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 2.  **Processing (Silver Layer):**
     * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
     * **Logic:** DuckDB (SQL-on-Serverless).
-    * **Transformation:** Performs Schema Enforcement (filters unknown coins) and unpivots data from Wide to Long format.
-    * **Storage:** Google Cloud Storage (Parquet).
+    * **Features:**
+        * **Historical Reconstruction:** Uses a "Wildcard Pattern" (`*.json`) to rebuild the entire dataset from history every run.
+        * **Schema Evolution:** Automatically handles complex fields like `ath`, `circulating_supply`, and `max_supply`.
+        * **Smart Valuation:** Calculates "Safe FDV" (Fully Diluted Valuation) for infinite-supply coins like ETH and DOGE.
+    * **Storage:** Google Cloud Storage (Parquet - Master History File).
     * **Function:** `silver-cleaning-func`
 
 3.  **Analytics (Gold Layer):**
