@@ -13,7 +13,6 @@ __pycache__/
 *.tfstate.backup
 .terraform.lock.hcl
 *.tfvars
-*.zip
 
 # IDEs
 .vscode/
@@ -23,6 +22,9 @@ __pycache__/
 *.json
 *.csv
 *.parquet
+
+# Compressed files
+*.zip
 
 # Google Cloud
 gcp-key.json
