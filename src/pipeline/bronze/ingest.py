@@ -81,7 +81,7 @@ def process_data_ingestion() -> Path:
             raise error
 
     # Save the combined data.
-    print(f"📦 Total records collected: {len(all_market_data)}")
+    print(f"📦 Total records collected: {len(all_market_data)}.")
 
     ingested_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_ingested_file = f"raw_prices_{ingested_timestamp}.json"
