@@ -11,26 +11,26 @@ GOLD_DIR = BASE_DIR / "data" / "gold"
 # Analysis Parameters
 WINDOW_SIZE = 7
 
-def validate_clean_files(clean_file_directory: Path, clean_file_pattern: str = '*.parquet') -> Path:
-    # Finds the most recently created file in a directory.
-    clean_files_found = (clean_file_directory.glob(clean_file_pattern))
+def validate_clean_file() -> Path:
+    # Validate that the specific cleaned parquet file exists.
+    clean_file = SILVER_DIR / "cleaned_market_data.parquet"
 
-    if not clean_files_found:
-        raise FileNotFoundError(f"❌ No file found in {clean_file_directory} matching {clean_file_pattern}")
+    if not clean_file.exists():
+        raise FileNotFoundError(f"❌ No Silver file found at {clean_file}. Run clean.py first.")
 
-    return max(clean_files_found, key=os.path.getctime)
+    return clean_file
 
 def process_data_analytics() -> Path:
     # Performs financial analysis on the Silver layer data. calculates SMA, Volatility, and Trading Signals.
     print("🚀 Starting Gold Layer - Data Analysis.")
 
-    # Get the latest file from silver layer directory.
+    # Get the specific file from silver layer directory.
     try:
-        latest_clean_file = validate_clean_files(SILVER_DIR)
+        latest_clean_file = validate_clean_file()
         print(f"📖 Reading historical data from: {latest_clean_file.name}")
-    except FileNotFoundError:
-        print("❌ No Silver data found. Please run clean.py first.")
-        raise FileNotFoundError("❌ Pipeline stopped: Missing silver data.")
+    except FileNotFoundError as file_not_found_error:
+        print(f"❌ Pipeline stopped: {file_not_found_error}")
+        raise file_not_found_error
 
     # Ensure gold directory exists.
     os.makedirs(GOLD_DIR, exist_ok=True)
@@ -80,8 +80,7 @@ def process_data_analytics() -> Path:
     """
 
     # Execute and Save
-    analyzed_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_analyzed_file = GOLD_DIR / f"analyzed_market_data_{analyzed_timestamp}.parquet"
+    output_analyzed_file = GOLD_DIR / "analyzed_market_data.parquet"
 
     print("⚙️ Running financial models in DuckDB.")
 

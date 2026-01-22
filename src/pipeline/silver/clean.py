@@ -74,8 +74,7 @@ def process_data_cleaning() -> Path:
     """
 
     # Execute and Save
-    cleaned_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_cleaned_file = SILVER_DIR / f"cleaned_market_data_{cleaned_timestamp}.parquet"
+    output_cleaned_file = SILVER_DIR / "cleaned_market_data.parquet"
 
     print("⚙️ Cleaning historical data with DuckDB.")
 
