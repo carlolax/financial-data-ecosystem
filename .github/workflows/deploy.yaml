@@ -8,45 +8,77 @@ on:
     paths:
       - 'infra/**'
       - 'src/cloud_functions/**'
+  workflow_dispatch:
 
 env:
   PROJECT_ID: crypto-data-platform
   TF_VERSION: 1.5.7
 
 jobs:
+  # Job 1 - Quality Gates (Linters & Security)
+  quality-check:
+    name: '🛡️ Quality & Security'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # Python Security & Quality using Ruff
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install & Run Ruff (Python Linter)
+        run: |
+          pip install ruff
+          # Run check on the src folder. 
+          # We use --output-format=github so errors show up nicely in the UI.
+          ruff check src/ --output-format=github || true 
+        # Note: '|| true' prevents it from failing the build entirely for now
+        # Remove '|| true' later when you want to force-stop on errors.
+
+      # 2. Terraform Security Scan using Trivy
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: 'infra' # Look inside the infra directory
+          hide-progress: false
+          exit-code: '0' # Set to '1' to block deploy on security issues
+          severity: 'CRITICAL,HIGH'
+
+  # 🚀 Job 2 - Deploy (Only runs if Quality Check passes)
   terraform:
     name: 'Terraform Apply'
+    needs: quality-check # <--- Requirement - waits for job above
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./infra
 
     steps:
-    # 1. Checkout the code
     - name: Checkout
       uses: actions/checkout@v3
 
-    # 2. Login to Google Cloud
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 3. Setup Terraform
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v2
       with:
         terraform_version: ${{ env.TF_VERSION }}
 
-    # 4. Initialize (Connects to state bucket)
     - name: Terraform Init
       run: terraform init
 
-    # 5. Check formatting
     - name: Terraform Format
       run: terraform fmt -check
 
-    # 6. Apply changes (Auto-approve)
     - name: Terraform Apply
+      # Only run on main branch pushes
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Variable to prevent hanging
       run: terraform apply -auto-approve -var="billing_account_id=01F3B9-004C24-B7B8F9"
