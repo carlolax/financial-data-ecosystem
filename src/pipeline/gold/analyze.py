@@ -11,13 +11,14 @@ GOLD_DIR = BASE_DIR / "data" / "gold"
 # Analysis Parameters
 WINDOW_SIZE = 7
 
-def get_latest_file(directory: Path, pattern: str = '*.parquet') -> Path:
+def validate_clean_files(clean_file_directory: Path, clean_file_pattern: str = '*.parquet') -> Path:
     # Finds the most recently created file in a directory.
-    silver_layer_files = (directory.glob(pattern))
+    clean_files_found = (clean_file_directory.glob(clean_file_pattern))
 
-    if not silver_layer_files:
-        raise FileNotFoundError(f"No files found in {directory} matching {pattern}")
-    return max(silver_layer_files, key=os.path.getctime)
+    if not clean_files_found:
+        raise FileNotFoundError(f"❌ No file found in {clean_file_directory} matching {clean_file_pattern}")
+
+    return max(clean_files_found, key=os.path.getctime)
 
 def process_data_analytics() -> Path:
     # Performs financial analysis on the Silver layer data. calculates SMA, Volatility, and Trading Signals.
@@ -25,11 +26,11 @@ def process_data_analytics() -> Path:
 
     # Get the latest file from silver layer directory.
     try:
-        latest_silver_file = get_latest_file(SILVER_DIR)
-        print(f"📖 Reading historical data from: {latest_silver_file.name}")
+        latest_clean_file = validate_clean_files(SILVER_DIR)
+        print(f"📖 Reading historical data from: {latest_clean_file.name}")
     except FileNotFoundError:
         print("❌ No Silver data found. Please run clean.py first.")
-        raise FileNotFoundError("Pipeline stopped: Missing silver data.")
+        raise FileNotFoundError("❌ Pipeline stopped: Missing silver data.")
 
     # Ensure gold directory exists.
     os.makedirs(GOLD_DIR, exist_ok=True)
@@ -59,7 +60,7 @@ def process_data_analytics() -> Path:
                     ORDER BY source_updated_at 
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as volatility_7d
-            FROM '{latest_silver_file}'
+            FROM '{latest_clean_file}'
         )
         SELECT 
             *,

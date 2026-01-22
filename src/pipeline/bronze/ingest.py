@@ -21,7 +21,7 @@ RATE_LIMIT_SLEEP = 5
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
 TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
 
-def fetch_batch(coin_ids: list) -> list:
+def batch_data_ingestion(coin_ids: list) -> list:
     # Helper to fetch a specific list of IDs from the API.
     params = {
         "vs_currency": "usd",
@@ -61,13 +61,13 @@ def process_data_ingestion() -> Path:
 
     # Loop through in chunks.
     for crypto_index in range(0, total_crypto_coins, BATCH_INGESTION_SIZE):
-        batch = crypto_coin_list[crypto_index : crypto_index + BATCH_INGESTION_SIZE]
+        current_chunk = crypto_coin_list[crypto_index : crypto_index + BATCH_INGESTION_SIZE]
         current_batch_count = (crypto_index // BATCH_INGESTION_SIZE) + 1
 
-        print(f"🔄 Fetching batch {current_batch_count} of {total_ingestion_batches} ({len(batch)} coins).")
+        print(f"🔄 Fetching batch {current_batch_count} of {total_ingestion_batches} ({len(current_chunk)} coins).")
 
         try:
-            batch_data = fetch_batch(batch)
+            batch_data = batch_data_ingestion(current_chunk)
             all_market_data.extend(batch_data)
             print(f"✅ Success. Ingested {len(batch_data)} records.")
 

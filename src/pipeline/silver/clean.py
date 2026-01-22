@@ -8,15 +8,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 BRONZE_DIR = BASE_DIR / "data" / "bronze"
 SILVER_DIR = BASE_DIR / "data" / "silver"
 
-def process_data_cleaning():
+def validate_ingested_files(ingest_file_directory: Path, ingest_file_pattern: str = "raw_prices_*.json") -> str:
+    # Verifies that source files actually exist before running DuckDB.
+    ingest_files_found = list(ingest_file_directory.glob(ingest_file_pattern))
+    ingest_file_count = len(ingest_files_found)
+
+    if ingest_file_count == 0:
+        raise FileNotFoundError(f"❌ No files found in {ingest_file_directory} matching '{ingest_file_pattern}'. Run ingest.py first.")
+
+    print(f"🔎 Found {ingest_file_count} files to process. Proceeding.")
+    return str(ingest_file_directory / ingest_file_pattern)
+
+def process_data_cleaning() -> Path:
     # Reads all JSON files from ingestion, deduplicates data, handles nulls, and saves to a parquet file.
     print("🚀 Starting Silver Layer - Schema Cleaning.")
 
     # Ensure output directory exists.
     os.makedirs(SILVER_DIR, exist_ok=True)
 
-    # Input Pattern - taking all files starting with 'raw_prices_'.
-    ingest_file_pattern = str(BRONZE_DIR / "raw_prices_*.json")
+    # Validate first instead of blindly creating the string.
+    try:
+        ingest_file_pattern = validate_ingested_files(BRONZE_DIR, "raw_prices_*.json")
+    except FileNotFoundError as file_not_found_error:
+        print(file_not_found_error)
+        raise file_not_found_error
 
     print(f"📂 Processing pattern: {ingest_file_pattern}")
 
@@ -51,7 +66,7 @@ def process_data_cleaning():
             last_updated as source_updated_at,
             current_timestamp as ingested_at
 
-        -- CHANGE: We read the glob pattern to get ALL history
+        -- CHANGE: Read the glob pattern to get ALL history
         FROM read_json_auto('{ingest_file_pattern}')
 
         -- Order by time to keep it organized (Newest data first)
