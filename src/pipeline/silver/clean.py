@@ -11,17 +11,17 @@ SILVER_DIR = BASE_DIR / "data" / "silver"
 def process_data_cleaning():
     # Reads all JSON files from ingestion, deduplicates data, handles nulls, and saves to a parquet file.
     print("🚀 Starting Silver Layer - Schema Cleaning.")
-    
-    # Ensure output directory exists
+
+    # Ensure output directory exists.
     os.makedirs(SILVER_DIR, exist_ok=True)
-    
-    # Input Pattern - taking all files starting with 'raw_prices_'
-    input_pattern = str(BRONZE_DIR / "raw_prices_*.json")
-    
-    print(f"📂 Processing pattern: {input_pattern}")
+
+    # Input Pattern - taking all files starting with 'raw_prices_'.
+    ingest_file_pattern = str(BRONZE_DIR / "raw_prices_*.json")
+
+    print(f"📂 Processing pattern: {ingest_file_pattern}")
 
     # Define the query using 'DISTINCT' to prevent duplicate rows if ingested the same data twice.
-    query = f"""
+    query_to_clean = f"""
         SELECT DISTINCT
             id as coin_id,
             symbol,
@@ -29,7 +29,7 @@ def process_data_cleaning():
             current_price,
             market_cap,
             market_cap_rank,
-            
+
             -- SAFE FDV CALCULATION
             -- If max_supply is NULL (Infinite), use total_supply as the proxy
             -- This prevents "NaN" errors in dashboards for ETH, DOGE, SOL
@@ -37,7 +37,7 @@ def process_data_cleaning():
                 WHEN max_supply IS NULL THEN (current_price * total_supply)
                 ELSE (current_price * max_supply)
             END as fully_diluted_valuation,
-            
+
             total_volume,
             high_24h,
             low_24h,
@@ -50,35 +50,36 @@ def process_data_cleaning():
             ath_date,
             last_updated as source_updated_at,
             current_timestamp as ingested_at
-            
+
         -- CHANGE: We read the glob pattern to get ALL history
-        FROM read_json_auto('{input_pattern}')
-        
+        FROM read_json_auto('{ingest_file_pattern}')
+
         -- Order by time to keep it organized (Newest data first)
         ORDER BY source_updated_at DESC
     """
 
     # Execute and Save
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = SILVER_DIR / f"cleaned_market_data_{timestamp}.parquet"
-    
+    cleaned_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_cleaned_file = SILVER_DIR / f"cleaned_market_data_{cleaned_timestamp}.parquet"
+
     print("⚙️ Cleaning historical data with DuckDB.")
-    
+
     try:
         duckdb.execute(f"""
-            COPY ({query}) 
-            TO '{output_file}' 
+            COPY ({query_to_clean}) 
+            TO '{output_cleaned_file}' 
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
-        print(f"✅ Silver Layer Complete. Saved Master History to: {output_file}")
-        return output_file
-        
+        print(f"✅ Silver Layer Complete. Cleaned file saved to: {output_cleaned_file}.")
+        return output_cleaned_file
+
     except Exception as error:
-        print(f"❌ Error in Silver Layer - Schema Cleaning: {error}")
+        print(f"❌ Error in Silver Layer - Schema Cleaning: {error}.")
         # If this fails, it might mean no files match the pattern
         if "No files found" in str(error) or "No such file" in str(error):
              print("💡 Hint: Make sure you have run 'ingest.py' at least once.")
         raise error
 
+# Entry point for running the silver layer (data cleaning) locally
 if __name__ == "__main__":
     process_data_cleaning()

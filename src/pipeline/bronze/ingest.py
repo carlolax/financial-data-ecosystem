@@ -17,7 +17,7 @@ COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
 BATCH_INGESTION_SIZE = 50
 RATE_LIMIT_SLEEP = 5
 
-# Default to a safe list if env is missing
+# Default to a safe list if env is missing.
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
 TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
 
@@ -44,22 +44,22 @@ def fetch_batch(coin_ids: list) -> list:
 
 def process_data_ingestion() -> Path:
     # Ingests market data in batches to respect API limits.
-    print(f"🚀 Starting Bronze Layer - Batch Ingestion")
+    print(f"🚀 Starting Bronze Layer - Batch Ingestion.")
 
-    # Prepare the list
+    # Prepare the list.
     crypto_coin_list = [crypto_coin.strip() for crypto_coin in TARGET_CRYPTO_COINS.split(",")]
     total_crypto_coins = len(crypto_coin_list)
 
-    # Calculate the total chunks so we can log "Batch 1 of 5"
+    # Calculate the total chunks to log "Batch 1 of 5".
     total_ingestion_batches = math.ceil(total_crypto_coins / BATCH_INGESTION_SIZE)
 
-    print(f"📋 Total Cryptocurrency Coins: {total_crypto_coins} | Total Ingestion Batches: {total_ingestion_batches}")
+    print(f"📋 Total Cryptocurrency Coins: {total_crypto_coins} | Total Ingestion Batches: {total_ingestion_batches}.")
 
-    # Ensure data/bronze directory exists
+    # Ensure data/bronze directory exists.
     os.makedirs(DATA_DIR, exist_ok=True)
     all_market_data = []
 
-    # Loop through in chunks
+    # Loop through in chunks.
     for crypto_index in range(0, total_crypto_coins, BATCH_INGESTION_SIZE):
         batch = crypto_coin_list[crypto_index : crypto_index + BATCH_INGESTION_SIZE]
         current_batch_count = (crypto_index // BATCH_INGESTION_SIZE) + 1
@@ -69,30 +69,30 @@ def process_data_ingestion() -> Path:
         try:
             batch_data = fetch_batch(batch)
             all_market_data.extend(batch_data)
-            print(f"✅ Success. Got {len(batch_data)} records.")
+            print(f"✅ Success. Ingested {len(batch_data)} records.")
 
-            # Pause execution to prevent hitting the API's rate limit (429 errors)
+            # Pause execution to prevent hitting the API's rate limit (429 errors).
             if current_batch_count < total_ingestion_batches:
                 print(f"😴 Rate Limit Sleep: {RATE_LIMIT_SLEEP}s to respect API limits.")
                 time.sleep(RATE_LIMIT_SLEEP)
 
         except Exception as error:
-            print(f"❌ Error fetching batch: {error}")
+            print(f"❌ Error ingesting batch: {error}.")
             raise error
 
-    # Save combined data
+    # Save the combined data.
     print(f"📦 Total records collected: {len(all_market_data)}")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"raw_prices_{timestamp}.json"
-    file_path = DATA_DIR / filename
+    ingested_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_ingested_file = f"raw_prices_{ingested_timestamp}.json"
+    file_path = DATA_DIR / output_ingested_file
 
     with open(file_path, "w") as json_file:
         json.dump(all_market_data, json_file, indent=4)
 
-    print(f"💾 Ingested rich data saved to: {file_path}")
+    print(f"💾 Ingested rich data saved to: {file_path}.")
     return file_path
  
-# Entry point for running the bronze layer (data ingestion) locally
+# Entry point for running the bronze layer (data ingestion) locally.
 if __name__ == "__main__":
     process_data_ingestion()
