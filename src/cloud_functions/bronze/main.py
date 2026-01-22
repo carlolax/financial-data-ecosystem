@@ -2,77 +2,120 @@ import functions_framework
 from google.cloud import storage
 import requests
 import json
-from datetime import datetime
+import time
+import math
 import os
+from datetime import datetime
 from typing import Tuple
 
 # --- CONFIGURATION ---
-BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME", "crypto-bronze-crypto-platform-carlo-2026")
-COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
-DEFAULT_COINS = "bitcoin,ethereum,solana,cardano"
+BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
+
+# --- CONSTANTS ---
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
+BATCH_INGESTION_SIZE = 50
+RATE_LIMIT_SLEEP = 5
+
+# Default to a safe list if env is missing.
+DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
+TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
+
+def batch_data_ingestion(coin_ids: list) -> list:
+    # Helper to fetch a specific list of IDs from the API.
+    params = {
+        "vs_currency": "usd",
+        "ids": ",".join(coin_ids),
+        "order": "market_cap_desc",
+        "per_page": 250,
+        "page": 1,
+        "sparkline": "false",
+        "price_change_percentage": "1h,24h,7d",
+        "locale": "en"
+    }
+
+    # Added a slight timeout increase for cloud stability.
+    coingecko_response = requests.get(COINGECKO_API_URL, params=params, timeout=15)
+
+    if coingecko_response.status_code == 429:
+        print("🚨 Rate limit hits (429). Ingestion is going too fast.")
+        # Return empty list to preserve partial data rather than crashing.
+        return []
+
+    coingecko_response.raise_for_status()
+    return coingecko_response.json()
 
 @functions_framework.http
 def process_data_ingestion(request) -> Tuple[str, int]:
-    """
-    Ingests crypto market data from CoinGecko and saves it to Google Cloud Storage (Bronze Layer).
+    # Ingests market data in batches to respect API limits.
+    print(f"🚀 Starting Bronze Layer - Cloud Batch Ingestion.")
 
-    Trigger:
-        HTTP Request (Cloud Scheduler).
-        Optional Query Param: ?coins=bitcoin,dogecoin (overrides default list).
+    # Check if bucket name is set.
+    if not BUCKET_NAME:
+        print("❌ Error: BRONZE_BUCKET_NAME environment variable not set.")
+        return "Error: Bucket Env Var Missing", 500
 
-    Process:
-        1. Parses the 'request' for custom coins (optional).
-        2. Fetches real-time prices from CoinGecko.
-        3. Uploads the raw data to the Bronze GCS Bucket.
+    # Prepare the list
+    crypto_coin_list = [crypto_coin.strip() for crypto_coin in TARGET_CRYPTO_COINS.split(",")]
+    total_crypto_coins = len(crypto_coin_list)
 
-    Returns:
-        tuple: ("Success Message", 200) on success.
+    # Calculate the total chunks to log "Batch 1 of 5".
+    total_ingestion_batches = math.ceil(total_crypto_coins / BATCH_INGESTION_SIZE)
 
-    Raises:
-        Exception: Propagates any error to GCP Logging to trigger alerts.
-    """
+    print(f"📋 Total Cryptocurrency Coins: {total_crypto_coins} | Total Ingestion Batches: {total_ingestion_batches}.")
 
-    # 1. Dynamic Configuration using requests
-    request_args = request.args
-    if request_args and "coins" in request_args:
-        target_coins = request_args["coins"]
-        print(f"🚀 Manual Override Detected. Fetching: {target_coins}")
-    else:
-        target_coins = DEFAULT_COINS
-        print(f"🚀 Starting Bronze Layer - Data Ingestion for: {target_coins}")
+    all_market_data = []
+
+    # Loop through in chunks
+    for crypto_index in range(0, total_crypto_coins, BATCH_INGESTION_SIZE):
+        current_chunk = crypto_coin_list[crypto_index : crypto_index + BATCH_INGESTION_SIZE]
+        current_batch_count = (crypto_index // BATCH_INGESTION_SIZE) + 1
+
+        print(f"🔄 Fetching batch {current_batch_count} of {total_ingestion_batches} ({len(current_chunk)} coins).")
+
+        try:
+            batch_data = batch_data_ingestion(current_chunk)
+
+            if batch_data:
+                all_market_data.extend(batch_data)
+                print(f"✅ Success. Ingested {len(batch_data)} records.")
+            else:
+                print(f"⚠️ Warning: Batch {current_batch_count} returned no data.")
+
+            # Pause execution to prevent hitting the API's rate limit (429 errors).
+            if current_batch_count < total_ingestion_batches:
+                print(f"😴 Rate Limit Sleep: {RATE_LIMIT_SLEEP}s to respect API limits.")
+                time.sleep(RATE_LIMIT_SLEEP)
+
+        except Exception as error:
+            print(f"❌ Error ingesting batch: {error}.")
+            # Return HTTP 500 to signal Cloud Scheduler/Monitoring to alert on failure.
+            return f"Error ingesting batch: {error}", 500
+
+    # --- SAVE TO GCS ---
+    print(f"📦 Total records collected: {len(all_market_data)}")
+
+    if not all_market_data:
+        return "⚠️ No data collected.", 200
 
     try:
-        # 2. Fetch data
-        params = {
-            "ids": target_coins,
-            "vs_currencies": "usd",
-            "include_24hr_vol": "true"
-        }
-
-        response = requests.get(COINGECKO_URL, params=params, timeout=10) # Added timeout
-        response.raise_for_status() # Raises error for 404, 500, etc.
-
-        coingecko_data = response.json()
-        print("✅ CoinGecko data fetched successfully.")
-
-        # 3. Upload to GCS
+        # Initialize Client
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
         # Generate filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        blob_name = f"raw_prices_{timestamp}.json"
-        blob = bucket.blob(blob_name)
+        ingested_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_ingested_file = f"raw_prices_{ingested_timestamp}.json"
 
+        # Create Blob and Upload
+        blob = bucket.blob(output_ingested_file)
         blob.upload_from_string(
-            data=json.dumps(coingecko_data),
-            content_type="application/json"
+            data=json.dumps(all_market_data, indent=4),
+            content_type='application/json'
         )
 
-        print(f"💾 Uploaded to gs://{BUCKET_NAME}/{blob_name}")
-        return f"Success: {blob_name}", 200 # Returns a tuple
+        print(f"💾 Ingested rich data saved to gs://{BUCKET_NAME}/{output_ingested_file}.")
+        return f"Success: {output_ingested_file}", 200
 
     except Exception as error:
-        print(f"❌ Critical Error in Bronze Cloud Function: {error}")
-        # Re-raise the error to stop the pipeline
-        raise error
+        print(f"❌ Storage Error: {error}")
+        return f"Storage Error: {error}", 500

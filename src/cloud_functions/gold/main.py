@@ -2,136 +2,115 @@ import functions_framework
 from google.cloud import storage
 import duckdb
 import os
-import shutil
 from pathlib import Path
 
 # --- CONFIGURATION ---
-GOLD_BUCKET_NAME = os.environ.get("GOLD_BUCKET_NAME", "crypto-gold-data")
+SILVER_BUCKET_NAME = os.environ.get("SILVER_BUCKET_NAME")
+GOLD_BUCKET_NAME = os.environ.get("GOLD_BUCKET_NAME")
 WINDOW_SIZE = 7
 
 @functions_framework.cloud_event
 def process_data_analyzing(cloud_event):
-    """
-    Event-Driven Cloud Function that recalculates market analytics.
+    # Event-Driven Cloud Function that recalculates market analytics.
+    print("🚀 Event triggered. Starting Gold Layer - Cloud Data Analysis.")
 
-    Trigger:
-        Google Cloud Storage (Object Finalize) on the Silver Bucket.
+    # Safety Checks
+    if not SILVER_BUCKET_NAME or not GOLD_BUCKET_NAME:
+        print("❌ Error: Bucket environment variables missing.")
+        return
 
-    Process:
-        1. Downloads ALL historical Parquet files from Silver.
-        2. Aggregates them using DuckDB.
-        3. Calculates Moving Averages (SMA) and Volatility.
-        4. Generates BUY/SELL signals.
-        5. Publishes a single 'market_summary.parquet' to the Gold Bucket.
-    """
-    data = cloud_event.data
-    source_bucket_name = data["bucket"]
+    # Setup Temporary Directories
+    TMP_SILVER_DIR = Path("/tmp/silver")
+    TMP_GOLD_DIR = Path("/tmp/gold")
 
-    print("🚀 Event triggered! Starting Gold Layer - Data Analysis")
-    print(f"Source: gs://{source_bucket_name}/{data['name']}")
-
-    # 1. Setup Paths
-    temp_root = Path("/tmp")
-    history_dir = temp_root / "silver_history"
-    output_file = temp_root / "market_summary.parquet"
-    
-    # Clean up old run data as a fresh start
-    if history_dir.exists():
-        shutil.rmtree(history_dir)
-    history_dir.mkdir(parents=True)
+    # Wipe and recreate to ensure clean state.
+    for folder in [TMP_SILVER_DIR, TMP_GOLD_DIR]:
+        if folder.exists():
+            for f in folder.glob("*"):
+                os.remove(f)
+        folder.mkdir(parents=True, exist_ok=True)
 
     try:
-        # 2. Download History
+        # Download Input File
         storage_client = storage.Client()
-        source_bucket = storage_client.bucket(source_bucket_name)
+        silver_bucket = storage_client.bucket(SILVER_BUCKET_NAME)
 
-        # List all processed files from Silver Layer
-        blobs = list(source_bucket.list_blobs(prefix="processed/"))
+        input_filename = "cleaned_market_data.parquet"
+        input_blob = silver_bucket.blob(input_filename)
 
-        download_count = 0
-        for blob in blobs:
-            if blob.name.endswith(".parquet"):
-                # Using Path to get the filename
-                safe_name = Path(blob.name).name
-                destination = history_dir / safe_name
-                blob.download_to_filename(str(destination))
-                download_count += 1
+        local_input_path = TMP_SILVER_DIR / input_filename
 
-        print(f"✅ Downloaded {download_count} files for historical analysis.")
-
-        if download_count == 0:
-            print("⚠️ No history found. Aborting analysis.")
+        if not input_blob.exists():
+            print(f"⚠️ {input_filename} not found in Silver bucket. Waiting for next run.")
             return
 
-        # 3. Analyze (DuckDB)
-        duckdb_con = duckdb.connect(database=':memory:')
+        print(f"📥 Downloading {input_filename} to {local_input_path}.")
+        input_blob.download_to_filename(str(local_input_path))
 
-        # SQL Query
-        query = f"""
-        COPY (
-            WITH base_metrics AS (
-                SELECT
-                    extraction_timestamp,
+        # Analyze
+        query_to_analyze = f"""
+            WITH moved_data AS (
+                SELECT 
                     coin_id,
-                    price_usd,
+                    symbol,
+                    name,
+                    source_updated_at,
+                    current_price,
+                    market_cap,
+                    ath,
 
-                    -- Calculate {WINDOW_SIZE}-Day Moving Average
-                    AVG(price_usd) OVER (
+                    -- Moving Average (7 Records ~ 7 Days)
+                    AVG(current_price) OVER (
                         PARTITION BY coin_id 
-                        ORDER BY extraction_timestamp 
+                        ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as sma_7d,
 
-                    -- Calculate Volatility
-                    STDDEV(price_usd) OVER (
+                    -- Volatility (Standard Deviation)
+                    STDDEV(current_price) OVER (
                         PARTITION BY coin_id 
-                        ORDER BY extraction_timestamp 
+                        ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as volatility_7d
-
-                FROM read_parquet('{history_dir}/*.parquet')
+                FROM '{local_input_path}'
             )
-
-            SELECT
-                extraction_timestamp,
-                coin_id,
-                price_usd,
-                CAST(sma_7d AS DECIMAL(18, 2)) as sma_7d,
-                CAST(volatility_7d AS DECIMAL(18, 2)) as volatility_7d,
-
-                -- Logic aligned with Local Pipeline
+            SELECT 
+                *,
+                -- Signal Logic (Mean Reversion Strategy)
                 CASE 
-                    WHEN price_usd < sma_7d AND volatility_7d > 0 THEN 'BUY'
-                    WHEN price_usd > sma_7d THEN 'SELL'
+                    WHEN current_price < sma_7d AND volatility_7d > 0 THEN 'BUY'
+                    WHEN current_price > sma_7d THEN 'SELL'
                     ELSE 'WAIT'
-                END as signal
+                END as signal,
 
-            FROM base_metrics
-            ORDER BY extraction_timestamp DESC, coin_id
-        ) TO '{output_file}' (FORMAT PARQUET);
+                current_timestamp as analyzed_at
+            FROM moved_data
+            ORDER BY source_updated_at DESC, coin_id
         """
 
-        duckdb_con.execute(query)
-        print(f"📊 Analysis Complete. Saved to {output_file}")
+        # Define Output
+        output_filename = "analyzed_market_data.parquet"
+        local_output_path = TMP_GOLD_DIR / output_filename
 
-        # 4. Publish to Gold
-        dest_bucket = storage_client.bucket(GOLD_BUCKET_NAME)
-        # Overwrite the single file to allow dashboard view the latest state
-        dest_blob = dest_bucket.blob("analytics/market_summary.parquet")
+        print("⚙️ Running financial models in DuckDB.")
 
-        dest_blob.upload_from_filename(str(output_file))
-        print(f"🚀 Published dashboard data: gs://{GOLD_BUCKET_NAME}/analytics/market_summary.parquet")
+        duckdb.execute(f"""
+            COPY ({query_to_analyze}) 
+            TO '{local_output_path}' 
+            (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
+        """)
+
+        print(f"✅ Analysis Complete. Local file created at: {local_output_path}")
+
+        # Upload to Gold Bucket.
+        gold_bucket = storage_client.bucket(GOLD_BUCKET_NAME)
+        output_blob = gold_bucket.blob(output_filename)
+
+        print(f"📤 Uploading to gs://{GOLD_BUCKET_NAME}/{output_filename}.")
+        output_blob.upload_from_filename(str(local_output_path))
+
+        print(f"🚀 Success! Gold Layer updated.")
 
     except Exception as error:
-        print(f"❌ Critical Error in Gold Layer: {error}")
-        # Re-raise the error to stop the pipeline
-        raise error
-
-    finally:
-        # 5. Cleanup
-        if history_dir.exists():
-            shutil.rmtree(history_dir)
-        if output_file.exists():
-            output_file.unlink()
-        print("🧹 Local cleanup complete.")
-        duckdb_con.close()
+        print(f"❌ Critical Error in Gold Layer: {error}.")
+        # Log error and exit gracefully to prevent infinite retry loops in GCP.
