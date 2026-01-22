@@ -32,13 +32,14 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
     * **Function:** `silver-cleaning-func`
 
 3.  **Analytics (Gold Layer):**
-    * **Trigger:** Event-Driven (Fires immediately when data lands in Silver).
-    * **Logic:** Aggregation & Window Functions (SQL).
-        * Calculates **7-Day Moving Averages** and **Volatility**.
-        * Generates **Buy/Wait/Hold Signals**.
-    * **Storage:** Google Cloud Storage (Parquet).
+    * **Trigger:** Event-Driven (Fires after Silver Layer completion).
+    * **Logic:** DuckDB (SQL-on-Serverless).
+    * **Features:**
+        * **Financial Modeling:** Calculates 7-Day Simple Moving Averages (SMA) and Volatility (Standard Deviation).
+        * **Algorithmic Signals:** Generates "BUY" (Dip), "SELL" (Rally), or "WAIT" signals based on Mean Reversion strategy.
+        * **Dynamic Input:** Automatically detects and processes the latest historical Master File.
+    * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
     * **Function:** `gold-analyzing-func`
-
 4.  **Visualization (The Command Center):**
     * **Tool:** Streamlit (Python-based UI).
     * **Mode:** Hybrid (Toggle between `LOCAL` disk data and `CLOUD` live bucket data).
