@@ -1,0 +1,52 @@
+name: Deploy Infrastructure
+
+# Trigger (Runs on push to main branch)
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - 'src/cloud_functions/**'
+
+env:
+  PROJECT_ID: crypto-data-platform
+  TF_VERSION: 1.5.7
+
+jobs:
+  terraform:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./infra
+
+    steps:
+    # 1. Checkout the code
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    # 2. Login to Google Cloud
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    # 3. Setup Terraform
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    # 4. Initialize (Connects to state bucket)
+    - name: Terraform Init
+      run: terraform init
+
+    # 5. Check formatting
+    - name: Terraform Format
+      run: terraform fmt -check
+
+    # 6. Apply changes (Auto-approve)
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: terraform apply -auto-approve -var="billing_account_id=01F3B9-004C24-B7B8F9"
