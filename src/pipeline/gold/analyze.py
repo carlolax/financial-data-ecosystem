@@ -1,19 +1,19 @@
 import duckdb
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # --- SETUP ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-SILVER_DIR = BASE_DIR / "data" / "silver"
-GOLD_DIR = BASE_DIR / "data" / "gold"
+CLEAN_DATA_DIR = BASE_DIR / "data" / "silver"
+ANALYZE_DATA_DIR = BASE_DIR / "data" / "gold"
 
 # Analysis Parameters
 WINDOW_SIZE = 7
 
 def validate_clean_file() -> Path:
     # Validate that the specific cleaned parquet file exists.
-    clean_file = SILVER_DIR / "cleaned_market_data.parquet"
+    clean_file = CLEAN_DATA_DIR / "cleaned_market_data.parquet"
 
     if not clean_file.exists():
         raise FileNotFoundError(f"❌ No Silver file found at {clean_file}. Run clean.py first.")
@@ -21,8 +21,9 @@ def validate_clean_file() -> Path:
     return clean_file
 
 def process_data_analytics() -> Path:
-    # Performs financial analysis on the Silver layer data. calculates SMA, Volatility, and Trading Signals.
     print("🚀 Starting Gold Layer - Data Analysis.")
+
+    analysis_time = datetime.now(timezone.utc).isoformat()
 
     # Get the specific file from silver layer directory.
     try:
@@ -33,28 +34,28 @@ def process_data_analytics() -> Path:
         raise file_not_found_error
 
     # Ensure gold directory exists.
-    os.makedirs(GOLD_DIR, exist_ok=True)
+    os.makedirs(ANALYZE_DATA_DIR, exist_ok=True)
 
-    # SQL Analysis - Calculate moving averages based on the 'source_updated_at' (API time).
+    # SQL Analysis
     query_to_analyze = f"""
         WITH moved_data AS (
             SELECT 
                 coin_id,
                 symbol,
                 name,
-                source_updated_at,
                 current_price,
                 market_cap,
                 ath,
-                
-                -- Moving Average (7 Records ~ 7 Days if run daily)
+                source_updated_at,
+                ingested_timestamp, 
+                processed_at,
+
                 AVG(current_price) OVER (
                     PARTITION BY coin_id 
                     ORDER BY source_updated_at 
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as sma_7d,
-                
-                -- Volatility (Standard Deviation)
+
                 STDDEV(current_price) OVER (
                     PARTITION BY coin_id 
                     ORDER BY source_updated_at 
@@ -62,42 +63,54 @@ def process_data_analytics() -> Path:
                 ) as volatility_7d
             FROM '{latest_clean_file}'
         )
+
         SELECT 
-            *,
-            -- Signal Logic (Mean Reversion Strategy)
+            -- Business Data
+            coin_id,
+            symbol,
+            name,
+            current_price,
+            market_cap,
+            ath,
+            sma_7d,
+            volatility_7d,
+
+            -- The Signal
             CASE 
-                -- If price is below average & volatility is present = Buy the Dip
                 WHEN current_price < sma_7d AND volatility_7d > 0 THEN 'BUY'
-                -- If price is above average = Take Profit
                 WHEN current_price > sma_7d THEN 'SELL'
                 ELSE 'WAIT'
             END as signal,
-            
-            -- Metadata
-            current_timestamp as analyzed_at
+
+            -- The Lineage Block
+            source_updated_at,
+            ingested_timestamp,
+            processed_at,
+            '{analysis_time}' as analyzed_at
+
         FROM moved_data
         ORDER BY source_updated_at DESC, coin_id
     """
 
     # Execute and Save
-    output_analyzed_file = GOLD_DIR / "analyzed_market_data.parquet"
+    analyzed_file_output = ANALYZE_DATA_DIR / "analyzed_market_summary.parquet"
 
     print("⚙️ Running financial models in DuckDB.")
 
     try:
         duckdb.execute(f"""
             COPY ({query_to_analyze}) 
-            TO '{output_analyzed_file}' 
+            TO '{analyzed_file_output}' 
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
 
-        print(f"✅ Gold Layer Complete. Analyzed file saved to: {output_analyzed_file}.")
+        print(f"✅ Gold Layer Complete. Analyzed file saved to: {analyzed_file_output}.")
 
-        # Print the latest signals.
+        # Print the latest signals (Previewing the new lineage columns too!)
         print("\n📊 Latest Signals Preview:")
-        duckdb.sql(f"SELECT symbol, current_price, sma_7d, signal FROM '{output_analyzed_file}' LIMIT 5").show()
+        duckdb.sql(f"SELECT * FROM '{analyzed_file_output}' LIMIT 5").show()
 
-        return output_analyzed_file
+        return analyzed_file_output
 
     except Exception as error:
         print(f"❌ Error during analysis: {error}.")
