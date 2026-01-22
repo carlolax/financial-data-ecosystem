@@ -1,6 +1,6 @@
 # ☁️ Crypto Data Platform (GCP + Python + Terraform)
 
-![Build Status](https://github.com/carlolax/crypto-data-platform/actions/workflows/deploy.yml/badge.svg)
+![Build Status](https://github.com/carlolax/crypto-data-platform/actions/workflows/deploy.yaml/badge.svg)
 
 A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization.
 
