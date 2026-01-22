@@ -25,3 +25,8 @@ variable "region" {
   description = "GCP Region"
   default     = "us-central1"
 }
+
+variable "billing_account_id" {
+  description = "The ID of the billing account to associate this project with"
+  type        = string
+}

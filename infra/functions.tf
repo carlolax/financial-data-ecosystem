@@ -70,6 +70,7 @@ resource "google_cloudfunctions_function" "silver_clean" {
   }
 
   environment_variables = {
+    BRONZE_BUCKET_NAME = google_storage_bucket.data_lake.name
     SILVER_BUCKET_NAME = google_storage_bucket.silver_layer.name
   }
 }
@@ -108,6 +109,7 @@ resource "google_cloudfunctions_function" "gold_analyze" {
   }
 
   environment_variables = {
-    GOLD_BUCKET_NAME = google_storage_bucket.gold_layer.name
+    SILVER_BUCKET_NAME = google_storage_bucket.silver_layer.name
+    GOLD_BUCKET_NAME   = google_storage_bucket.gold_layer.name
   }
 }
