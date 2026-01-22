@@ -8,7 +8,7 @@ resource "google_billing_budget" "budget" {
 
   amount {
     specified_amount {
-      units = "10" 
+      units = "10"
     }
   }
 
