@@ -60,6 +60,26 @@ def batch_ingest_data(coin_ids: list) -> list:
 
 @functions_framework.http
 def process_ingest_data(request) -> Tuple[str, int]:
+    """
+    Orchestrates the Bronze Layer ingestion process for the Cloud Environment.
+    Triggered via HTTP request (Cloud Scheduler or manual Curl).
+
+    WORKFLOW:
+    1. Input Parsing (Dynamic Override):
+       - Checks the HTTP Request for a 'coins' parameter (JSON body or URL Arg).
+       - If found, ingests ONLY those coins (useful for backfilling specific assets).
+       - If missing, defaults to the 'CRYPTO_COINS' environment variable.
+    2. Batching & Fetching:
+       - Logic: Graceful Degradation (returns empty list on error) to prevent Cloud Retry Storms.
+    3. Lineage: Injects 'ingested_timestamp' (UTC) into every record.
+    4. Storage: Uploads the final JSON directly to the Google Cloud Storage (GCS) Bronze Bucket.
+
+    Args:
+        request (flask.Request): The HTTP request object containing optional JSON/Args.
+
+    Returns:
+        Tuple[str, int]: A status message and an HTTP status code (e.g., 200, 500).
+    """
     print(f"🚀 Starting Bronze Layer - Cloud Batch Ingestion.")
 
     if not BRONZE_BUCKET_NAME:
