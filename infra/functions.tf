@@ -27,7 +27,7 @@ resource "google_cloudfunctions_function" "bronze_ingest" {
   source_archive_bucket = google_storage_bucket.function_source.name
   source_archive_object = google_storage_bucket_object.bronze_layer_zip_upload.name
   trigger_http          = true
-  entry_point           = "process_data_ingestion"
+  entry_point           = "process_ingest_data"
 
   service_account_email = google_service_account.function_runner.email
 
