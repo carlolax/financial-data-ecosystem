@@ -5,16 +5,16 @@ import json
 import time
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple
 
 # --- CONFIGURATION ---
-BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
+BRONZE_BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
 
 # --- CONSTANTS ---
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
 BATCH_INGESTION_SIZE = 50
-RATE_LIMIT_SLEEP = 5
+BATCH_RATE_LIMIT = 5
 
 # Default to a safe list if env is missing.
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
@@ -22,7 +22,7 @@ TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
 
 def batch_data_ingestion(coin_ids: list) -> list:
     # Helper to fetch a specific list of IDs from the API.
-    params = {
+    ingestion_params = {
         "vs_currency": "usd",
         "ids": ",".join(coin_ids),
         "order": "market_cap_desc",
@@ -34,7 +34,7 @@ def batch_data_ingestion(coin_ids: list) -> list:
     }
 
     # Added a slight timeout increase for cloud stability.
-    coingecko_response = requests.get(COINGECKO_API_URL, params=params, timeout=15)
+    coingecko_response = requests.get(COINGECKO_API_URL, params=ingestion_params, timeout=15)
 
     if coingecko_response.status_code == 429:
         print("🚨 Rate limit hits (429). Ingestion is going too fast.")
@@ -46,22 +46,38 @@ def batch_data_ingestion(coin_ids: list) -> list:
 
 @functions_framework.http
 def process_data_ingestion(request) -> Tuple[str, int]:
-    # Ingests market data in batches to respect API limits.
     print(f"🚀 Starting Bronze Layer - Cloud Batch Ingestion.")
 
     # Check if bucket name is set.
-    if not BUCKET_NAME:
+    if not BRONZE_BUCKET_NAME:
         print("❌ Error: BRONZE_BUCKET_NAME environment variable not set.")
         return "Error: Bucket Env Var Missing", 500
 
-    # Prepare the list
-    crypto_coin_list = [crypto_coin.strip() for crypto_coin in TARGET_CRYPTO_COINS.split(",")]
+    # --- CAPTURE TIME ONCE ---
+    capture_current_time = datetime.now(timezone.utc)
+    ingested_timestamp_str = capture_current_time.strftime("%Y%m%d_%H%M%S")
+
+    # Attempt to get 'coins' from JSON body (POST) or URL args (GET).
+    target_coins_str = TARGET_CRYPTO_COINS  # Default fallback
+    
+    # Try parsing JSON body first.
+    request_json = request.get_json(silent=True)
+    
+    if request_json and 'coins' in request_json:
+        target_coins_str = request_json['coins']
+        print(f"🔧 Manual Override Detected: Ingesting specific coins: {target_coins_str}")
+    elif request.args and 'coins' in request.args:
+        target_coins_str = request.args['coins']
+        print(f"🔧 URL Parameter Detected: Ingesting specific coins: {target_coins_str}")
+    
+    # Clean and split the string into a list.
+    crypto_coin_list = [c.strip() for c in target_coins_str.split(",")]
     total_crypto_coins = len(crypto_coin_list)
 
-    # Calculate the total chunks to log "Batch 1 of 5".
+    # Calculate batches
     total_ingestion_batches = math.ceil(total_crypto_coins / BATCH_INGESTION_SIZE)
 
-    print(f"📋 Total Cryptocurrency Coins: {total_crypto_coins} | Total Ingestion Batches: {total_ingestion_batches}.")
+    print(f"📋 Total Coins: {total_crypto_coins} | Batches: {total_ingestion_batches}")
 
     all_market_data = []
 
@@ -81,15 +97,18 @@ def process_data_ingestion(request) -> Tuple[str, int]:
             else:
                 print(f"⚠️ Warning: Batch {current_batch_count} returned no data.")
 
-            # Pause execution to prevent hitting the API's rate limit (429 errors).
             if current_batch_count < total_ingestion_batches:
-                print(f"😴 Rate Limit Sleep: {RATE_LIMIT_SLEEP}s to respect API limits.")
-                time.sleep(RATE_LIMIT_SLEEP)
+                print(f"😴 Rate Limit Sleep: {BATCH_RATE_LIMIT}s to respect API limits.")
+                time.sleep(BATCH_RATE_LIMIT)
 
         except Exception as error:
             print(f"❌ Error ingesting batch: {error}.")
-            # Return HTTP 500 to signal Cloud Scheduler/Monitoring to alert on failure.
             return f"Error ingesting batch: {error}", 500
+
+    # --- INJECT LINEAGE ---
+    print("💉 Adding 'ingested_timestamp' into records.")
+    for ingested_data in all_market_data:
+        ingested_data['ingested_timestamp'] = capture_current_time.isoformat()
 
     # --- SAVE TO GCS ---
     print(f"📦 Total records collected: {len(all_market_data)}")
@@ -98,22 +117,18 @@ def process_data_ingestion(request) -> Tuple[str, int]:
         return "⚠️ No data collected.", 200
 
     try:
-        # Initialize Client
         storage_client = storage.Client()
-        bucket = storage_client.bucket(BUCKET_NAME)
+        bucket = storage_client.bucket(BRONZE_BUCKET_NAME)
 
-        # Generate filename
-        ingested_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_ingested_file = f"raw_prices_{ingested_timestamp}.json"
+        output_ingested_file = f"raw_prices_{ingested_timestamp_str}.json"
 
-        # Create Blob and Upload
         blob = bucket.blob(output_ingested_file)
         blob.upload_from_string(
             data=json.dumps(all_market_data, indent=4),
             content_type='application/json'
         )
 
-        print(f"💾 Ingested rich data saved to gs://{BUCKET_NAME}/{output_ingested_file}.")
+        print(f"💾 Ingested rich data saved to gs://{BRONZE_BUCKET_NAME}/{output_ingested_file}.")
         return f"Success: {output_ingested_file}", 200
 
     except Exception as error:
