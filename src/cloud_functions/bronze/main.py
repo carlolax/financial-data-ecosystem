@@ -13,14 +13,14 @@ BRONZE_BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
 
 # --- CONSTANTS ---
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
-BATCH_INGEST_DATA = 50
-BATCH_RATE_LIMIT = 5
+BATCH_SIZE = 50
+RATE_LIMIT_SECONDS = 10
 
 # Default to a safe list if env is missing.
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
 TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
 
-def batch_ingest_data(coin_ids: list) -> list:
+def fetch_market_data_batch(coin_ids: list) -> list:
     """
     Fetches market data for a specific list of Coin IDs from CoinGecko.
 
@@ -36,7 +36,7 @@ def batch_ingest_data(coin_ids: list) -> list:
     2. Partial Success: I want to save the batches I *did* successfully fetch, 
        rather than discarding everything because one batch failed.
     """
-    ingest_params = {
+    params = {
         "vs_currency": "usd",
         "ids": ",".join(coin_ids),
         "order": "market_cap_desc",
@@ -48,18 +48,18 @@ def batch_ingest_data(coin_ids: list) -> list:
     }
 
     # Added a slight timeout increase for cloud stability.
-    coingecko_response = requests.get(COINGECKO_API_URL, params=ingest_params, timeout=15)
+    response = requests.get(COINGECKO_API_URL, params=params, timeout=15)
 
-    if coingecko_response.status_code == 429:
+    if response.status_code == 429:
         # Cloud: Return an empty list to avoid triggering an automatic Cloud Retry loop.
-        print("🚨 Rate limit hits (429). Ingestion is going too fast.")
+        print("🚨 Rate limit hit (429). Skipping batch to avoid retry loop.")
         return []
 
-    coingecko_response.raise_for_status()
-    return coingecko_response.json()
+    response.raise_for_status()
+    return response.json()
 
 @functions_framework.http
-def process_ingest_data(request) -> Tuple[str, int]:
+def process_ingestion(request) -> Tuple[str, int]:
     """
     Orchestrates the Bronze Layer ingestion process for the Cloud Environment.
     Triggered via HTTP request (Cloud Scheduler or manual Curl).
@@ -80,88 +80,85 @@ def process_ingest_data(request) -> Tuple[str, int]:
     Returns:
         Tuple[str, int]: A status message and an HTTP status code (e.g., 200, 500).
     """
-    print(f"🚀 Starting Bronze Layer - Cloud Batch Ingestion.")
+    print(f"🚀 Starting Bronze Layer - Cloud Ingestion.")
 
     if not BRONZE_BUCKET_NAME:
-        print("❌ Error: BRONZE_BUCKET_NAME environment variable not set.")
-        return "Error: Bucket Env Var Missing", 500
+        return "Error: BRONZE_BUCKET_NAME missing.", 500
 
-    capture_current_time = datetime.now(timezone.utc)
-    ingest_timestamp = capture_current_time.strftime("%Y%m%d_%H%M%S")
-
-    target_crypto_coins = TARGET_CRYPTO_COINS
-
-    # Try parsing JSON body first.
+    # 1. Setup Time and Config
+    capture_time = datetime.now(timezone.utc)
+    file_timestamp = capture_time.strftime("%Y%m%d_%H%M%S")
+    
+    # 2. Dynamic Override Parsing
+    target_coins_str = TARGET_CRYPTO_COINS
     request_json = request.get_json(silent=True)
 
     if request_json and 'coins' in request_json:
-        target_crypto_coins = request_json['coins']
-        print(f"🔧 Manual Override Detected: Ingesting specific coins: {target_crypto_coins}")
+        target_coins_str = request_json['coins']
+        print(f"🔧 Manual Override: {target_coins_str}")
     elif request.args and 'coins' in request.args:
-        target_crypto_coins = request.args['coins']
-        print(f"🔧 URL Parameter Detected: Ingesting specific coins: {target_crypto_coins}")
+        target_coins_str = request.args['coins']
+        print(f"🔧 URL Override: {target_coins_str}")
 
     # Clean and split the string into a list.
-    crypto_coin_list = [c.strip() for c in target_crypto_coins.split(",")]
-    total_crypto_coins = len(crypto_coin_list)
+    coin_list = [c.strip() for c in target_coins_str.split(",")]
+    total_coins = len(coin_list)
 
     # Calculate batches
-    total_ingestion_batches = math.ceil(total_crypto_coins / BATCH_INGEST_DATA)
+    total_batches = math.ceil(total_coins / BATCH_SIZE)
 
-    print(f"📋 Total Coins: {total_crypto_coins} | Batches: {total_ingestion_batches}")
+    print(f"📋 Targets: {total_coins} Coins | Batches: {total_batches}")
 
-    all_ingest_data = []
+    all_market_data = []
 
-    # Loop through in chunks
-    for crypto_index in range(0, total_crypto_coins, BATCH_INGEST_DATA):
-        current_chunk = crypto_coin_list[crypto_index : crypto_index + BATCH_INGEST_DATA]
-        current_batch_count = (crypto_index // BATCH_INGEST_DATA) + 1
+    # 3. Batch Loop
+    for i in range(0, total_coins, BATCH_SIZE):
+        current_batch_ids = coin_list[i : i + BATCH_SIZE]
+        batch_num = (i // BATCH_SIZE) + 1
 
-        print(f"🔄 Fetching batch {current_batch_count} of {total_ingestion_batches} ({len(current_chunk)} coins).")
+        print(f"🔄 Processing Batch {batch_num}/{total_batches} ({len(current_batch_ids)} coins).")
 
         try:
-            batch_data = batch_ingest_data(current_chunk)
+            batch_data = fetch_market_data_batch(current_batch_ids)
 
             if batch_data:
-                all_ingest_data.extend(batch_data)
-                print(f"✅ Success. Ingested {len(batch_data)} records.")
+                all_market_data.extend(batch_data)
+                print(f"   ✅ Success: {len(batch_data)} records.")
             else:
-                print(f"⚠️ Warning: Batch {current_batch_count} returned no data.")
+                print(f"   ⚠️ Warning: Batch {batch_num} empty (Rate Limit?).")
 
-            if current_batch_count < total_ingestion_batches:
-                print(f"😴 Batch Rate Limit: {BATCH_RATE_LIMIT}s to respect API limits.")
-                time.sleep(BATCH_RATE_LIMIT)
+            if batch_num < total_batches:
+                print(f"   😴 Sleeping {RATE_LIMIT_SECONDS}s.")
+                time.sleep(RATE_LIMIT_SECONDS)
 
-        except Exception as error:
-            print(f"❌ Error ingesting batch: {error}.")
-            return f"Error ingesting batch: {error}", 500
+        except Exception as e:
+            print(f"❌ Error on Batch {batch_num}: {error}")
+            return f"Error: {error}", 500
 
-    # --- INJECT LINEAGE ---
-    print("💉 Adding 'ingested_timestamp' into records.")
-    for data in all_ingest_data:
-        data['ingested_timestamp'] = capture_current_time.isoformat()
+    # 4. Lineage Injection
+    print("💉 Injecting lineage timestamps.")
+    for record in all_market_data:
+        record['ingested_timestamp'] = capture_time.isoformat()
 
-    # --- SAVE TO GCS ---
-    print(f"📦 Total records collected: {len(all_ingest_data)}")
-
-    if not all_ingest_data:
-        return "⚠️ No ingest data collected.", 200
+    # 5. Save to GCS
+    if not all_market_data:
+        return "Warning: No data collected.", 200
 
     try:
-        ingest_storage_client = storage.Client()
-        ingest_bucket = ingest_storage_client.bucket(BRONZE_BUCKET_NAME)
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BRONZE_BUCKET_NAME)
 
-        ingest_file = f"raw_ingested_prices_{ingest_timestamp}.json"
+        output_filename = f"raw_prices_{file_timestamp}.json"
+        blob = bucket.blob(output_filename)
 
-        ingest_blob = ingest_bucket.blob(ingest_file)
-        ingest_blob.upload_from_string(
-            data=json.dumps(all_ingest_data, indent=4),
+        blob.upload_from_string(
+            data=json.dumps(all_market_data, indent=4),
             content_type='application/json'
         )
 
-        print(f"💾 Ingested rich data saved to gs://{BRONZE_BUCKET_NAME}/{ingest_file}.")
-        return f"Success: {ingest_file}", 200
+        print(f"📦 Uploaded {len(all_market_data)} records to gs://{BRONZE_BUCKET_NAME}/{output_filename}")
+        return f"Success: {output_filename}", 200
 
     except Exception as error:
-        print(f"❌ Ingested storage error: {error}")
-        return f"❌ Ingested storage error: {error}", 500
+        print(f"❌ Storage Error: {error}")
+        return f"Storage Error: {error}", 500
