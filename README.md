@@ -16,10 +16,11 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
         * **Rich Data:** Captures ATH, Circulating Supply, High/Low 24h, and Market Cap Rank.
         * **Smart Batching:** Automatically splits large coin lists into chunks to ensure scalability.
         * **Rate Limiting:** Built-in throttling to respect API limits (prevents 429 errors).
-    * **Compute:** Google Cloud Function (Python 3.10).
-    * **Trigger:** Cloud Scheduler (Daily cron job).
+        * **Fail-Safe:** Implements "Graceful Degradation" to prevent Cloud Retry Storms.
+    * **Compute:** Google Cloud Function Gen 2 (Python 3.10).
+    * **Trigger:** Cloud Scheduler (Hourly cron job).
     * **Storage:** Google Cloud Storage (Raw JSON).
-    * **Function:** `bronze-ingesting-func`
+    * **Function:** `function-bronze-ingest`
 
 2.  **Processing (Silver Layer):**
     * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
@@ -40,6 +41,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
         * **Dynamic Input:** Automatically detects and processes the latest historical Master File.
     * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
     * **Function:** `gold-analyzing-func`
+
 4.  **Visualization (The Command Center):**
     * **Tool:** Streamlit (Python-based UI).
     * **Mode:** Hybrid (Toggle between `LOCAL` disk data and `CLOUD` live bucket data).
@@ -50,7 +52,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 * **Language:** Python 3.10
 * **Infrastructure:** Terraform
 * **Data Processing:** Pandas (Local Ingest), DuckDB (Cloud Transformation)
-* **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM, Pub/Sub)
+* **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM)
 * **Visualization:** Streamlit, Plotly
 * **Testing:** Pytest, Mocks (unittest.mock)
 * **Data Format:** JSON (Raw) → Parquet (Compressed)
@@ -59,41 +61,56 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 
 ```text
 .
-├── infra/                  # Terraform Infrastructure code
-│   ├── main.tf             # Resource definitions (Buckets, Functions, IAM)
-│   ├── variables.tf        # Input variable declarations
-│   └── terraform.tfvars    # Configuration values (Region, IDs)
+├── CONTRIBUTING.md
+├── LICENSE
+├── README.md
+├── SECURITY.md
+├── data/                   # Local data storage (for testing)
+│   ├── bronze/             # Raw JSON files
+│   ├── gold/               # Final Aggregated Parquet files
+│   └── silver/             # Cleaned Parquet files
+├── infra/                  # Terraform Infrastructure Code
+│   ├── bronze_layer_function.zip
+│   ├── budget.tf           # Billing alerts
+│   ├── functions.tf        # Cloud Function definitions (Source Zipping + Deployment)
+│   ├── gcp-key.json        # (Ignored) Service Account Key
+│   ├── gold_layer_function.zip
+│   ├── iam.tf              # Service Accounts & Permissions
+│   ├── provider.tf         # GCP Provider & Backend Config
+│   ├── scheduler.tf        # Cloud Scheduler (Cron Jobs)
+│   ├── silver_layer_function.zip
+│   ├── storage.tf          # GCS Bucket Definitions (Bronze/Silver/Gold)
+│   ├── terraform.tfstate   # (Ignored) State file
+│   ├── terraform.tfvars    # Configuration values (Region, IDs)
+│   └── variables.tf        # Input variable declarations
 ├── src/
 │   ├── cloud_functions/    # Production-ready Cloud Functions
 │   │   ├── bronze/         # Ingestion Logic (main.py + requirements.txt)
-│   │   ├── silver/         # Transformation Logic (main.py + requirements.txt)
-│   │   └── gold/           # Analytics & Signals Logic (main.py + requirements.txt)
+│   │   ├── gold/           # Analytics Logic (main.py + requirements.txt)
+│   │   └── silver/         # Transformation Logic (main.py + requirements.txt)
+│   ├── dashboard.py        # Hybrid Streamlit Dashboard
+│   ├── environment.yaml    # Conda Environment
 │   ├── pipeline/           # Local Data Pipeline Logic
 │   │   ├── bronze/         # Local ingestion script (ingest.py)
-│   │   ├── silver/         # Local cleaning script (clean.py)
 │   │   ├── gold/           # Local analytics script (analyze.py)
-│   │   └── run_pipeline.py # Pipeline Orchestrator (Runs all layers)
-│   └── dashboard.py        # Hybrid Streamlit Dashboard
-├── tests/                  # Unit Test Suite
-│   ├── test_bronze.py      # Bronze Layer Tests (Mocked API)
-│   └── test_silver.py      # Silver Layer Tests (Mocked GCS + Real DuckDB)
-├── data/                   # Local data storage (for testing)
-│   ├── bronze/             # Raw JSON files
-│   ├── silver/             # Cleaned Parquet files
-│   └── gold/               # Final Aggregated Parquet files
-└── README.md
+│   │   ├── run_pipeline.py # Orchestrator
+│   │   └── silver/         # Local cleaning script (clean.py)
+│   └── requirements.txt
+└── tests/                  # Unit Test Suite
+    ├── test_bronze.py
+    └── test_silver.py
 ```
 
 ## ⚙️ CI/CD Automation
 This project uses GitHub Actions to automate the infrastructure deployment, ensuring a "GitOps" workflow where code changes automatically reflect in the cloud.
 
-- **Workflow**: `.github/workflows/deploy.yml`
+- **Workflow**: `.github/workflows/deploy.yaml`
 - **Trigger**: Pushes to the `main` branch (specifically for `infra/` or `src/cloud_functions/`).
 - **Operations**:
     1. Setup: Authenticates via Workload Identity (Service Account Key).
     2. Lint: Runs `terraform fmt` to ensure code quality.
     3. Deploy: Runs `terraform apply` to update Google Cloud resources.
-    4. State Management: Terraform State is stored remotely in a GCS Bucket (`gs://cdp-tf-state...`) to allow team collaboration and persistence.
+    4. State Management: Terraform State is stored remotely in a GCS Bucket to allow team collaboration and persistence.
 
 ## 🚀 Deployment Guide
 **Prerequisites**
@@ -115,7 +132,7 @@ terraform apply
 ### 2. Manual Trigger (The "Domino Effect")
 You only need to trigger the Bronze function. The rest of the pipeline is fully automated.
 ```bash
-gcloud functions call bronze-ingesting-func \
+gcloud functions call function-bronze-ingest \
   --region=us-central1 \
   --data='{}'
 ```
