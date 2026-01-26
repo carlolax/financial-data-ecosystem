@@ -5,40 +5,60 @@ from datetime import datetime, timezone
 
 # --- SETUP ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-INGEST_DATA_DIR = BASE_DIR / "data" / "bronze"
-CLEAN_DATA_DIR = BASE_DIR / "data" / "silver"
+BRONZE_DIR = BASE_DIR / "data" / "bronze"
+SILVER_DIR = BASE_DIR / "data" / "silver"
 
-def validate_ingested_files(ingest_file_directory: Path, ingest_file_pattern: str = "raw_prices_*.json") -> str:
-    # Verifies that source files actually exist before running DuckDB.
-    ingest_files_found = list(ingest_file_directory.glob(ingest_file_pattern))
-    ingest_file_count = len(ingest_files_found)
+# --- CONSTANTS ---
+SOURCE_PATTERN = "raw_prices_*.json"
+OUTPUT_FILENAME = "cleaned_market_data.parquet"
 
-    if ingest_file_count == 0:
-        raise FileNotFoundError(f"❌ No files found in {ingest_file_directory} matching '{ingest_file_pattern}'. Run ingest.py first.")
+def get_source_files_pattern(directory: Path, pattern: str) -> str:
+    """
+    Validates that source files exist and returns the glob pattern string for DuckDB.
+    
+    Why:
+    DuckDB needs a string pattern (like 'data/*.json') to load multiple files.
+    This function ensures the directory isn't empty before I try to query it.
+    """
+    files_found = list(directory.glob(pattern))
+    
+    if not files_found:
+        raise FileNotFoundError(f"❌ No files found in {directory} matching '{pattern}'. Run ingestion first.")
 
-    print(f"🔎 Found {ingest_file_count} files to process. Processing.")
-    return str(ingest_file_directory / ingest_file_pattern)
+    print(f"🔎 Found {len(files_found)} raw files. Processing.")
+    return str(directory / pattern)
 
-def process_data_cleaning() -> Path:
-    # Reads all JSON files from ingestion, deduplicates data, handles nulls, and saves to a parquet file.
+def process_cleaning() -> Path:
+    """
+    Orchestrates the Silver Layer cleaning process for the Local Environment.
+
+    Workflow:
+    1. Validation: Checks if Bronze data exists (raw_prices_*.json).
+    2. Configuration: Sets up DuckDB to read the local JSON files.
+    3. Transformation (SQL):
+       - Deduplication: Selects DISTINCT records to handle overlapping data.
+       - Schema Handling: Extracts 'Safe FDV' for coins with infinite supply.
+       - Metadata: Injects 'processed_at' timestamp.
+    4. Storage: Saves the result as a single optimized Parquet file in data/silver/.
+
+    Returns:
+        Path: The file path of the saved Parquet file.
+    """
     print("🚀 Starting Silver Layer - Schema Cleaning.")
 
+    # 1. Setup and Output Directory
     processing_time = datetime.now(timezone.utc).isoformat()
+    os.makedirs(SILVER_DIR, exist_ok=True)
 
-    # Ensure output directory exists.
-    os.makedirs(CLEAN_DATA_DIR, exist_ok=True)
-
-    # Validate first instead of blindly creating the string.
     try:
-        ingest_file_pattern = validate_ingested_files(INGEST_DATA_DIR, "raw_prices_*.json")
-    except FileNotFoundError as file_not_found_error:
-        print(file_not_found_error)
-        raise file_not_found_error
+        # Validate input files
+        source_path_str = get_source_files_pattern(BRONZE_DIR, SOURCE_PATTERN)
+    except Exception as error:
+        print(error)
+        raise error
 
-    print(f"📂 Processing pattern: {ingest_file_pattern}.")
-
-    # Define the query using 'DISTINCT' to prevent duplicate rows.
-    query_to_clean = f"""
+    # 2. Define the Cleaning Query
+    query = f"""
         SELECT DISTINCT
             id as coin_id,
             symbol,
@@ -47,7 +67,8 @@ def process_data_cleaning() -> Path:
             market_cap,
             market_cap_rank,
 
-            -- SAFE FDV CALCULATION
+            -- Safe FDV Calculation (Handle infinite supply coins like ETH)
+            -- If max_supply is missing, I calculate FDV using total_supply instead.
             CASE 
                 WHEN max_supply IS NULL THEN (current_price * total_supply)
                 ELSE (current_price * max_supply)
@@ -67,31 +88,28 @@ def process_data_cleaning() -> Path:
             ingested_timestamp,
             '{processing_time}' as processed_at
 
-        FROM read_json_auto('{ingest_file_pattern}')
+        FROM read_json_auto('{source_path_str}')
         ORDER BY source_updated_at DESC
     """
 
-    # Execute and Save
-    clean_file_output = CLEAN_DATA_DIR / "cleaned_market_data.parquet"
-
-    print("⚙️ Cleaning historical data with DuckDB.")
+    # 3. Execute Transformation and Save
+    output_path = SILVER_DIR / OUTPUT_FILENAME
+    print("⚙️  Executing DuckDB transformation.")
 
     try:
+        # COPY ... TO ... is the fastest way to export data in DuckDB.
+        # I use snappy compression to keep the file size small.
         duckdb.execute(f"""
-            COPY ({query_to_clean}) 
-            TO '{clean_file_output}' 
+            COPY ({query}) 
+            TO '{output_path}' 
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
-        print(f"✅ Silver Layer Complete. Cleaned file saved to: {clean_file_output}.")
-        return clean_file_output
+        print(f"✅ Silver Layer Complete. Saved to: {output_path}")
+        return output_path
 
     except Exception as error:
-        print(f"❌ Error in Silver Layer - Schema Cleaning: {error}.")
-        # If this fails, it might mean no files match the pattern
-        if "No files found" in str(error) or "No such file" in str(error):
-             print("💡 Hint: Make sure you have run 'ingest.py' at least once.")
+        print(f"❌ Error in Silver Layer: {error}")
         raise error
 
-# Entry point for running the silver layer (data cleaning) locally
 if __name__ == "__main__":
-    process_data_cleaning()
+    process_cleaning()
