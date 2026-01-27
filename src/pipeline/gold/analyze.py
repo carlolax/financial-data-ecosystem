@@ -15,10 +15,15 @@ WINDOW_SIZE = 7
 
 def get_source_file(directory: Path, filename: str) -> str:
     """
-    Validates that the specific Silver Layer file exists.
+    Validates that the source file exists before attempting to read it.
+
+    Why:
+    DuckDB needs a valid file path to run the query. If the file is missing
+    (e.g., the Silver layer hasn't run), I want to fail fast with a clear error
+    instead of letting DuckDB crash with a confusing message.
     """
     file_path = directory / filename
-    
+
     if not file_path.exists():
         raise FileNotFoundError(f"❌ No Silver file found at {file_path}. Run cleaning first.")
 
@@ -36,7 +41,7 @@ def process_analysis() -> Path:
        - Calculates Volatility (Standard Deviation).
        - Generates Signals: 'BUY' (Dip), 'SELL' (Rally), or 'WAIT'.
     3. Storage: Saves the result as a single Parquet file in data/gold/.
-    
+
     Returns:
         Path: The file path of the saved Parquet file.
     """
