@@ -1,116 +1,132 @@
-import functions_framework
-from google.cloud import storage
 import duckdb
 import os
-from pathlib import Path
+import google.auth
+from google.auth.transport.requests import Request
+from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
-SILVER_BUCKET_NAME = os.environ.get("SILVER_BUCKET_NAME")
-GOLD_BUCKET_NAME = os.environ.get("GOLD_BUCKET_NAME")
+SILVER_BUCKET = os.environ.get("SILVER_BUCKET_NAME")
+GOLD_BUCKET = os.environ.get("GOLD_BUCKET_NAME")
 WINDOW_SIZE = 7
 
-@functions_framework.cloud_event
-def process_data_analyzing(cloud_event):
-    # Event-Driven Cloud Function that recalculates market analytics.
-    print("🚀 Event triggered. Starting Gold Layer - Cloud Data Analysis.")
+def get_gcp_credentials() -> str:
+    """
+    Fetches the automatic Service Account credentials from the Cloud Function environment.
 
-    # Safety Checks
-    if not SILVER_BUCKET_NAME or not GOLD_BUCKET_NAME:
-        print("❌ Error: Bucket environment variables missing.")
-        return
+    Why:
+    DuckDB needs an 'access_token' to read/write files in Google Cloud Storage.
+    I generate this token dynamically using the function's identity (Service Account).
+    """
+    # I use '_' to ignore the project ID since I only need the credentials.
+    credentials, _ = google.auth.default()
+    credentials.refresh(Request())
+    return credentials.token
 
-    # Setup Temporary Directories
-    TMP_SILVER_DIR = Path("/tmp/silver")
-    TMP_GOLD_DIR = Path("/tmp/gold")
+def process_analysis(event, context):
+    """
+    Orchestrates the Gold Layer: Financial Analysis (Cloud Function).
 
-    # Wipe and recreate to ensure clean state.
-    for folder in [TMP_SILVER_DIR, TMP_GOLD_DIR]:
-        if folder.exists():
-            for f in folder.glob("*"):
-                os.remove(f)
-        folder.mkdir(parents=True, exist_ok=True)
+    Trigger:
+        Event-Driven. Fires automatically when 'cleaned_market_data.parquet' 
+        is created in the Silver Bucket.
+
+    Workflow:
+    1. Authentication: Generates a Google Security Token for DuckDB.
+    2. Configuration: Sets up DuckDB to treat Google Cloud Storage like an S3 bucket.
+    3. Transformation: Calculates SMA (7-day) and Volatility; generates BUY/SELL signals.
+    4. Storage: Writes the result directly to the Gold Bucket.
+    """
+    # This helps trace specific execution runs in Google Cloud Logs.
+    print(f"🚀 Event {context.event_id} triggered by file: {event['name']} in bucket: {event['bucket']}")
 
     try:
-        # Download Input File
-        storage_client = storage.Client()
-        silver_bucket = storage_client.bucket(SILVER_BUCKET_NAME)
+        # 1. Authenticate with Google Cloud
+        token = get_gcp_credentials()
 
-        input_filename = "cleaned_market_data.parquet"
-        input_blob = silver_bucket.blob(input_filename)
+        # 2. Configure DuckDB (In-Memory)
+        con = duckdb.connect(database=":memory:")
+        con.execute("INSTALL httpfs; LOAD httpfs;")
 
-        local_input_path = TMP_SILVER_DIR / input_filename
+        # Map GCS to the S3 API (Standard DuckDB pattern for GCP access)
+        con.execute(f"SET s3_region='us-central1';")
+        con.execute(f"SET s3_endpoint='storage.googleapis.com';")
+        con.execute(f"SET s3_access_token='{token}';") 
+        con.execute("SET s3_use_https=1;")
 
-        if not input_blob.exists():
-            print(f"⚠️ {input_filename} not found in Silver bucket. Waiting for next run.")
-            return
+        # 3. Define Paths (Direct Cloud Access)
+        source_path = f"s3://{SILVER_BUCKET}/cleaned_market_data.parquet"
+        output_path = f"s3://{GOLD_BUCKET}/analyzed_market_summary.parquet"
+        
+        analysis_time = datetime.now(timezone.utc).isoformat()
 
-        print(f"📥 Downloading {input_filename} to {local_input_path}.")
-        input_blob.download_to_filename(str(local_input_path))
-
-        # Analyze
-        query_to_analyze = f"""
-            WITH moved_data AS (
+        # 4. Define the Analytical Query
+        query = f"""
+            WITH metrics AS (
                 SELECT 
                     coin_id,
                     symbol,
                     name,
-                    source_updated_at,
                     current_price,
                     market_cap,
                     ath,
+                    source_updated_at,
+                    ingested_timestamp, 
+                    processed_at,
 
-                    -- Moving Average (7 Records ~ 7 Days)
+                    -- 7-Day Moving Average
                     AVG(current_price) OVER (
                         PARTITION BY coin_id 
                         ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as sma_7d,
 
-                    -- Volatility (Standard Deviation)
+                    -- Volatility
                     STDDEV(current_price) OVER (
                         PARTITION BY coin_id 
                         ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as volatility_7d
-                FROM '{local_input_path}'
+                FROM '{source_path}'
             )
+
             SELECT 
-                *,
-                -- Signal Logic (Mean Reversion Strategy)
+                coin_id,
+                symbol,
+                name,
+                current_price,
+                market_cap,
+                ath,
+                sma_7d,
+                volatility_7d,
+
+                -- Signal Strategy
                 CASE 
                     WHEN current_price < sma_7d AND volatility_7d > 0 THEN 'BUY'
                     WHEN current_price > sma_7d THEN 'SELL'
                     ELSE 'WAIT'
                 END as signal,
 
-                current_timestamp as analyzed_at
-            FROM moved_data
+                source_updated_at,
+                ingested_timestamp,
+                processed_at,
+                '{analysis_time}' as analyzed_at
+
+            FROM metrics
             ORDER BY source_updated_at DESC, coin_id
         """
 
-        # Define Output
-        output_filename = "analyzed_market_data.parquet"
-        local_output_path = TMP_GOLD_DIR / output_filename
+        print("⚙️ Executing DuckDB Financial Models in Cloud.")
 
-        print("⚙️ Running financial models in DuckDB.")
-
-        duckdb.execute(f"""
-            COPY ({query_to_analyze}) 
-            TO '{local_output_path}' 
-            (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
+        # 5. Execute & Save (Direct Write)
+        con.execute(f"""
+            COPY ({query}) 
+            TO '{output_path}' 
+            (FORMAT 'PARQUET', CODEC 'SNAPPY')
         """)
 
-        print(f"✅ Analysis Complete. Local file created at: {local_output_path}")
-
-        # Upload to Gold Bucket.
-        gold_bucket = storage_client.bucket(GOLD_BUCKET_NAME)
-        output_blob = gold_bucket.blob(output_filename)
-
-        print(f"📤 Uploading to gs://{GOLD_BUCKET_NAME}/{output_filename}.")
-        output_blob.upload_from_filename(str(local_output_path))
-
-        print(f"🚀 Success! Gold Layer updated.")
+        print(f"✅ Gold Layer Complete. Saved to: {output_path}")
+        return "Success"
 
     except Exception as error:
-        print(f"❌ Critical Error in Gold Layer: {error}.")
-        # Log error and exit gracefully to prevent infinite retry loops in GCP.
+        print(f"❌ Critical Error in Gold Cloud Function: {error}")
+        raise error
