@@ -21,7 +21,7 @@ resource "google_storage_bucket" "function_source" {
 # 2. BRONZE LAYER: Raw Data Lake
 # ------------------------------------------------
 # Stores the raw JSON responses exactly as they come from CoinGecko.
-# This is our "Source of Truth" if we ever need to re-process data.
+# This is our "Source of Truth" if I ever need to re-process data.
 resource "google_storage_bucket" "data_lake" {
   name          = var.bronze_bucket_name
   location      = var.region
@@ -36,7 +36,7 @@ resource "google_storage_bucket" "data_lake" {
   versioning { enabled = true }
 
   # COST SAVING: The "Janitor".
-  # Automatically deletes raw JSON files after 30 days since we 
+  # Automatically deletes raw JSON files after 30 days since I 
   # likely only need the processed version in Silver/Gold.
   lifecycle_rule {
     condition {
@@ -80,19 +80,19 @@ resource "google_storage_bucket" "silver_layer" {
 # Stores aggregated metrics (e.g., "Monthly Average Price").
 # This data is ready for dashboards and visualization tools.
 resource "google_storage_bucket" "gold_layer" {
-  name          = var.gold_bucket_name
+  name          = "${var.project_id}-gold-analytics"
   location      = var.region
-  storage_class = "STANDARD"
-  force_destroy = true
+  force_destroy = true # Allows deleting the bucket even if it has files (for testing)
 
-  # SECURITY
   uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
-
-  versioning { enabled = true }
-
-  labels = {
-    environment = "dev"
-    layer       = "gold"
+  
+  # Lifecycle Rule: Clean up old analysis files after 90 days to save costs
+  lifecycle_rule {
+    condition {
+      age = 90
+    }
+    action {
+      type = "Delete"
+    }
   }
 }

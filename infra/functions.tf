@@ -110,7 +110,7 @@ resource "google_cloudfunctions_function" "silver_clean" {
   # Identity: Uses the same "Runner" service account as Bronze
   service_account_email = google_service_account.function_runner.email
 
-  # ⚡ TRIGGER: The "Domino Effect"
+  # TRIGGER: The "Domino Effect"
   # This tells Google: "Watch the Bronze bucket. If a NEW file is finalized (uploaded),
   # fire this function immediately."
   event_trigger {
@@ -126,24 +126,30 @@ resource "google_cloudfunctions_function" "silver_clean" {
 }
 
 # -------------------------------------------------------------------------
-# 🥇 GOLD LAYER: Analysis (Gen 1 Function)
+# 🥇 GOLD LAYER: Analytics (Gen 1 Function)
 # -------------------------------------------------------------------------
 
+# Step 1: Zip the Code
+# Packages the Python logic from 'src/cloud_functions/gold'
 data "archive_file" "gold_layer_zip" {
   type        = "zip"
   source_dir  = "${path.module}/../src/cloud_functions/gold"
   output_path = "${path.module}/gold_layer_function.zip"
 }
 
+# Step 2: Upload to Cloud Storage
+# Moves the zip file to the system 'function_source' bucket
 resource "google_storage_bucket_object" "gold_layer_zip_upload" {
-  name   = "gold-analyzing-${data.archive_file.gold_layer_zip.output_md5}.zip"
+  name   = "gold-analytics-${data.archive_file.gold_layer_zip.output_md5}.zip"
   bucket = google_storage_bucket.function_source.name
   source = data.archive_file.gold_layer_zip.output_path
 }
 
-resource "google_cloudfunctions_function" "gold_analyze" {
-  name        = "gold-analyzing-func"
-  description = "Event-driven: Analyze Market Signals"
+# Step 3: Deploy the Cloud Function
+# Uses Gen 1 because I need the Storage Trigger ("watch a bucket") capability.
+resource "google_cloudfunctions_function" "gold_analysis" {
+  name        = "gold-analytics-func"
+  description = "Event-driven: Calculate SMA & Signals from Silver Data"
   runtime     = "python310"
   region      = var.region
   project     = var.project_id
@@ -152,17 +158,20 @@ resource "google_cloudfunctions_function" "gold_analyze" {
   source_archive_bucket = google_storage_bucket.function_source.name
   source_archive_object = google_storage_bucket_object.gold_layer_zip_upload.name
 
-  entry_point = "process_data_analyzing"
+  # MUST match the function name in src/cloud_functions/gold/main.py
+  entry_point = "process_analysis"
 
-  # LINKS TO: iam.tf
+  # Identity: Uses the same "Runner" service account
   service_account_email = google_service_account.function_runner.email
 
-  # TRIGGER: Runs when a file is created in Silver (silver_layer)
+  # TRIGGER: The Final Domino
+  # Fires when a file is finalized (saved) in the SILVER bucket.
   event_trigger {
     event_type = "google.storage.object.finalize"
     resource   = google_storage_bucket.silver_layer.name
   }
 
+  # Config: Injects bucket names so Python knows where to read/write
   environment_variables = {
     SILVER_BUCKET_NAME = google_storage_bucket.silver_layer.name
     GOLD_BUCKET_NAME   = google_storage_bucket.gold_layer.name
