@@ -5,40 +5,58 @@ from datetime import datetime, timezone
 
 # --- SETUP ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-CLEAN_DATA_DIR = BASE_DIR / "data" / "silver"
-ANALYZE_DATA_DIR = BASE_DIR / "data" / "gold"
+SILVER_DIR = BASE_DIR / "data" / "silver"
+GOLD_DIR = BASE_DIR / "data" / "gold"
 
-# Analysis Parameters
+# --- CONSTANTS ---
+SOURCE_FILENAME = "cleaned_market_data.parquet"
+OUTPUT_FILENAME = "analyzed_market_summary.parquet"
 WINDOW_SIZE = 7
 
-def validate_clean_file() -> Path:
-    # Validate that the specific cleaned parquet file exists.
-    clean_file = CLEAN_DATA_DIR / "cleaned_market_data.parquet"
+def get_source_file(directory: Path, filename: str) -> str:
+    """
+    Validates that the specific Silver Layer file exists.
+    """
+    file_path = directory / filename
+    
+    if not file_path.exists():
+        raise FileNotFoundError(f"❌ No Silver file found at {file_path}. Run cleaning first.")
 
-    if not clean_file.exists():
-        raise FileNotFoundError(f"❌ No Silver file found at {clean_file}. Run clean.py first.")
+    print(f"📖 Reading historical data from: {filename}")
+    return str(file_path)
 
-    return clean_file
+def process_analysis() -> Path:
+    """
+    Orchestrates the Gold Layer: Financial Analysis & Signal Generation (Local).
 
-def process_data_analytics() -> Path:
+    Workflow:
+    1. Validation: Checks if Silver Parquet data exists.
+    2. Logic (DuckDB Window Functions):
+       - Calculates 7-Day Simple Moving Average (SMA).
+       - Calculates Volatility (Standard Deviation).
+       - Generates Signals: 'BUY' (Dip), 'SELL' (Rally), or 'WAIT'.
+    3. Storage: Saves the result as a single Parquet file in data/gold/.
+    
+    Returns:
+        Path: The file path of the saved Parquet file.
+    """
     print("🚀 Starting Gold Layer - Data Analysis.")
 
+    # 1. Setup
     analysis_time = datetime.now(timezone.utc).isoformat()
+    os.makedirs(GOLD_DIR, exist_ok=True)
 
-    # Get the specific file from silver layer directory.
     try:
-        latest_clean_file = validate_clean_file()
-        print(f"📖 Reading historical data from: {latest_clean_file.name}")
-    except FileNotFoundError as file_not_found_error:
-        print(f"❌ Pipeline stopped: {file_not_found_error}")
-        raise file_not_found_error
+        source_path_str = get_source_file(SILVER_DIR, SOURCE_FILENAME)
+    except Exception as error:
+        print(error)
+        raise error
 
-    # Ensure gold directory exists.
-    os.makedirs(ANALYZE_DATA_DIR, exist_ok=True)
-
-    # SQL Analysis
-    query_to_analyze = f"""
-        WITH moved_data AS (
+    # 2. Define the Analytical Query
+    # I use Common Table Expressions (WITH clause) to calculate metrics first,
+    # then use those metrics to generate the "Signal" in the final SELECT.
+    query = f"""
+        WITH metrics AS (
             SELECT 
                 coin_id,
                 symbol,
@@ -50,18 +68,20 @@ def process_data_analytics() -> Path:
                 ingested_timestamp, 
                 processed_at,
 
+                -- 7-Day Moving Average (The "Trend")
                 AVG(current_price) OVER (
                     PARTITION BY coin_id 
                     ORDER BY source_updated_at 
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as sma_7d,
 
+                -- Volatility (Standard Deviation)
                 STDDEV(current_price) OVER (
                     PARTITION BY coin_id 
                     ORDER BY source_updated_at 
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as volatility_7d
-            FROM '{latest_clean_file}'
+            FROM '{source_path_str}'
         )
 
         SELECT 
@@ -75,47 +95,45 @@ def process_data_analytics() -> Path:
             sma_7d,
             volatility_7d,
 
-            -- The Signal
+            -- The Strategy Signal (Mean Reversion)
             CASE 
                 WHEN current_price < sma_7d AND volatility_7d > 0 THEN 'BUY'
                 WHEN current_price > sma_7d THEN 'SELL'
                 ELSE 'WAIT'
             END as signal,
 
-            -- The Lineage Block
+            -- Lineage
             source_updated_at,
             ingested_timestamp,
             processed_at,
             '{analysis_time}' as analyzed_at
 
-        FROM moved_data
+        FROM metrics
         ORDER BY source_updated_at DESC, coin_id
     """
 
-    # Execute and Save
-    analyzed_file_output = ANALYZE_DATA_DIR / "analyzed_market_summary.parquet"
-
-    print("⚙️ Running financial models in DuckDB.")
+    # 3. Execute and Save
+    output_path = GOLD_DIR / OUTPUT_FILENAME
+    print("⚙️  Running financial models in DuckDB.")
 
     try:
         duckdb.execute(f"""
-            COPY ({query_to_analyze}) 
-            TO '{analyzed_file_output}' 
+            COPY ({query}) 
+            TO '{output_path}' 
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
 
-        print(f"✅ Gold Layer Complete. Analyzed file saved to: {analyzed_file_output}.")
+        print(f"✅ Gold Layer Complete. Saved to: {output_path}")
 
-        # Print the latest signals (Previewing the new lineage columns too!)
+        # Optional: Preview the results to prove it worked
         print("\n📊 Latest Signals Preview:")
-        duckdb.sql(f"SELECT * FROM '{analyzed_file_output}' LIMIT 5").show()
+        duckdb.sql(f"SELECT symbol, current_price, sma_7d, signal FROM '{output_path}' LIMIT 5").show()
 
-        return analyzed_file_output
+        return output_path
 
     except Exception as error:
-        print(f"❌ Error during analysis: {error}.")
+        print(f"❌ Error during analysis: {error}")
         raise error
 
-# Entry point for running the gold layer (data analytics) locally.
 if __name__ == "__main__":
-    process_data_analytics()
+    process_analysis()
