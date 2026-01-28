@@ -80,13 +80,12 @@ resource "google_storage_bucket" "silver_layer" {
 # Stores aggregated metrics (e.g., "Monthly Average Price").
 # This data is ready for dashboards and visualization tools.
 resource "google_storage_bucket" "gold_layer" {
-  name          = "${var.project_id}-gold-analytics"
+  name          = var.gold_bucket_name
   location      = var.region
-  force_destroy = true # Allows deleting the bucket even if it has files (for testing)
+  force_destroy = true
 
   uniform_bucket_level_access = true
-  
-  # Lifecycle Rule: Clean up old analysis files after 90 days to save costs
+
   lifecycle_rule {
     condition {
       age = 90

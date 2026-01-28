@@ -19,8 +19,8 @@ data "archive_file" "bronze_layer_zip" {
 # The zip file is moved to the "Function Source" bucket.
 # The MD5 hash in the filename ensures Terraform detects code changes and redeploys.
 resource "google_storage_bucket_object" "bronze_zip_upload" {
-  name   = "bronze_layer-${data.archive_file.bronze_layer_zip.output_md5}.zip"
-  
+  name = "bronze_layer-${data.archive_file.bronze_layer_zip.output_md5}.zip"
+
   # LINKS TO: resource "google_storage_bucket" "function_source" in storage.tf
   bucket = google_storage_bucket.function_source.name
   source = data.archive_file.bronze_layer_zip.output_path
@@ -154,7 +154,7 @@ resource "google_cloudfunctions_function" "gold_analysis" {
   region      = var.region
   project     = var.project_id
 
-  available_memory_mb   = 512
+  available_memory_mb   = 1024
   source_archive_bucket = google_storage_bucket.function_source.name
   source_archive_object = google_storage_bucket_object.gold_layer_zip_upload.name
 
