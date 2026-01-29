@@ -16,21 +16,20 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
         * **Rich Data:** Captures ATH, Circulating Supply, High/Low 24h, and Market Cap Rank.
         * **Smart Batching:** Automatically splits large coin lists into chunks to ensure scalability.
         * **Rate Limiting:** Built-in throttling to respect API limits (prevents 429 errors).
-        * **Fail-Safe:** Implements "Graceful Degradation" to prevent Cloud Retry Storms.
     * **Compute:** Google Cloud Function Gen 2 (Python 3.10).
-    * **Trigger:** Cloud Scheduler (Hourly cron job).
+    * **Trigger:** Cloud Scheduler (Hourly cron job) OR Client-Side Remote Control.
     * **Storage:** Google Cloud Storage (Raw JSON).
-    * **Function:** `function-bronze-ingest`
+    * **Function:** `cdp-bronze-ingest-v2`
 
 2.  **Processing (Silver Layer):**
     * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
     * **Logic:** DuckDB (SQL-on-Serverless).
+    * **Stability:** Uses a **"Download → Process → Upload"** pattern to handle memory constraints and prevent C++ threading crashes in the serverless environment.
     * **Features:**
         * **Historical Reconstruction:** Uses a "Wildcard Pattern" (`*.json`) to rebuild the entire dataset from history every run.
         * **Schema Evolution:** Automatically handles complex fields like `ath`, `circulating_supply`, and `max_supply`.
-        * **Smart Valuation:** Calculates "Safe FDV" (Fully Diluted Valuation) for infinite-supply coins like ETH and DOGE.
     * **Storage:** Google Cloud Storage (Parquet - Master History File).
-    * **Function:** `silver-cleaning-func`
+    * **Function:** `cdp-silver-clean-v2`
 
 3.  **Analytics (Gold Layer):**
     * **Trigger:** Event-Driven (Fires after Silver Layer completion).
@@ -38,9 +37,8 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
     * **Features:**
         * **Financial Modeling:** Calculates 7-Day Simple Moving Averages (SMA) and Volatility (Standard Deviation).
         * **Algorithmic Signals:** Generates "BUY" (Dip), "SELL" (Rally), or "WAIT" signals based on Mean Reversion strategy.
-        * **Dynamic Input:** Automatically detects and processes the latest historical Master File.
     * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
-    * **Function:** `gold-analyzing-func`
+    * **Function:** `cdp-gold-analytics-v2`
 
 4.  **Visualization (The Command Center):**
     * **Tool:** Streamlit (Python-based UI).
@@ -50,12 +48,11 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ## 🛠 Tech Stack
 
 * **Language:** Python 3.10
-* **Infrastructure:** Terraform
-* **Data Processing:** Pandas (Local Ingest), DuckDB (Cloud Transformation)
-* **Cloud:** Google Cloud Platform (Functions, Storage, Scheduler, IAM)
+* **Infrastructure:** Terraform (IaC)
+* **Data Processing:** Pandas (Ingest), DuckDB (OLAP Transformation)
+* **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
 * **Visualization:** Streamlit, Plotly
-* **Testing:** Pytest, Mocks (unittest.mock)
-* **Data Format:** JSON (Raw) → Parquet (Compressed)
+* **Orchestration:** Eventarc (Triggers) & Custom Client Script (`run_pipeline.py`)
 
 ## 📂 Project Structure
 
@@ -93,7 +90,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   ├── pipeline/           # Local Data Pipeline Logic
 │   │   ├── bronze/         # Local ingestion script (ingest.py)
 │   │   ├── gold/           # Local analytics script (analyze.py)
-│   │   ├── run_pipeline.py # Orchestrator
+│   │   ├── run_pipeline.py # Cloud Remote Control (Client-Side Trigger)
 │   │   └── silver/         # Local cleaning script (clean.py)
 │   └── requirements.txt
 └── tests/                  # Unit Test Suite
@@ -129,20 +126,19 @@ terraform plan
 terraform apply
 ```
 
-### 2. Manual Trigger (The "Domino Effect")
-You only need to trigger the Bronze function. The rest of the pipeline is fully automated.
+### 2. Manual Trigger (Remote Control)
+You can trigger the entire cloud pipeline directly from your local machine using the custom orchestrator script. This handles OIDC authentication and sends the trigger event.
 ```bash
-gcloud functions call function-bronze-ingest \
-  --region=us-central1 \
-  --data='{}'
+# Ensure you are authenticated
+gcloud auth application-default login
+
+# Trigger the Cloud Pipeline
+python src/pipeline/run_pipeline.py
 ```
 
 ### 3. Verification & Visualization
 To see the results in the Strategy Command Center:
 ```bash
-# Authenticate locally to read from GCS
-gcloud auth application-default login
-
 # Launch the Dashboard
 streamlit run src/dashboard.py
 ```
