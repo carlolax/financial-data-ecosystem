@@ -29,7 +29,7 @@ resource "google_storage_bucket_object" "bronze_zip_upload" {
 # Step 3: Deploy the Cloud Function (Gen 2)
 # I use Gen 2 here because it's triggered via HTTP (Cloud Scheduler).
 resource "google_cloudfunctions2_function" "bronze_ingest_function" {
-  name        = "bronze-ingest-function"
+  name        = "cdp-bronze-ingest-v2"
   location    = var.region
   description = "Ingests raw crypto data from CoinGecko to Bronze Bucket"
 
@@ -93,7 +93,7 @@ resource "google_storage_bucket_object" "silver_layer_zip_upload" {
 # Step 3: Deploy the Cloud Function
 # This function is "Event-Driven" (triggered by storage), so I use Gen 1.
 resource "google_cloudfunctions_function" "silver_clean" {
-  name        = "silver-clean-function"
+  name        = "cdp-silver-clean-v2"
   description = "Event-driven: Clean Bronze JSON to Silver Parquet"
   runtime     = "python310"
   region      = var.region
@@ -148,7 +148,7 @@ resource "google_storage_bucket_object" "gold_layer_zip_upload" {
 # Step 3: Deploy the Cloud Function
 # Uses Gen 1 because I need the Storage Trigger ("watch a bucket") capability.
 resource "google_cloudfunctions_function" "gold_analysis" {
-  name        = "gold-analytics-function"
+  name        = "cdp-gold-analytics-v2"
   description = "Event-driven: Calculate SMA & Signals from Silver Data"
   runtime     = "python310"
   region      = var.region
