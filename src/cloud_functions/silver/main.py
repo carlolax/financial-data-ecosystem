@@ -1,24 +1,10 @@
 import duckdb
 import os
-import google.auth
-from google.auth.transport.requests import Request
-from datetime import datetime, timezone
+from google.cloud import storage
 
 # --- CONFIGURATION ---
 BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET_NAME")
 SILVER_BUCKET = os.environ.get("SILVER_BUCKET_NAME")
-
-def get_gcp_credentials() -> str:
-    """
-    Fetches the automatic Service Account credentials from the Cloud Function environment.
-
-    Why:
-    DuckDB needs an 'access_token' to read/write files in Google Cloud Storage.
-    I generate this token dynamically using the function's identity (Service Account).
-    """
-    credentials, project = google.auth.default()
-    credentials.refresh(Request())
-    return credentials.token
 
 def process_cleaning(event, context):
     """
@@ -37,32 +23,32 @@ def process_cleaning(event, context):
        - Calculates 'Safe FDV' (Fully Diluted Valuation).
     4. Storage: Writes the result as a single optimized Parquet file to the Silver Bucket.
     """
-    print(f"🚀 Event triggered by file: {event['name']} in bucket: {event['bucket']}")
+    input_filename = event['name']
+    print(f"🚀 Event {context.event_id} triggered. Processing file: {input_filename}")
+
+    # Define temporary local paths
+    local_input = f"/tmp/{input_filename}"
+    local_output = f"/tmp/cleaned_market_data.parquet"
 
     try:
-        # 1. Authenticate with Google Cloud
-        token = get_gcp_credentials()
+        # 1. Initialize GCS Client
+        storage_client = storage.Client()
 
-        # 2. Configure DuckDB for Cloud Storage
+        # 2. Download JSON from Bronze
+        source_bucket = storage_client.bucket(BRONZE_BUCKET)
+        source_blob = source_bucket.blob(input_filename)
+
+        print(f"📥 Downloading {input_filename} to {local_input}.")
+        source_blob.download_to_filename(local_input)
+
+        # 3. Configure DuckDB
         con = duckdb.connect(database=":memory:")
+        con.execute("PRAGMA memory_limit='800MB';")
+        con.execute("PRAGMA threads=1;")
 
-        # Install the HTTPFS extension to allow reading remote files.
-        con.execute("INSTALL httpfs; LOAD httpfs;")
+        # 4. Clean Data
+        print("⚙️ Cleaning data with DuckDB.")
 
-        # Map GCS to the S3 API (This is a standard DuckDB pattern for GCP access)
-        con.execute(f"SET s3_region='us-central1';")
-        con.execute(f"SET s3_endpoint='storage.googleapis.com';")
-        con.execute(f"SET s3_access_token='{token}';") 
-        con.execute("SET s3_use_https=1;")
-
-        # 3. Define Data Paths
-        source_pattern = f"s3://{BRONZE_BUCKET}/raw_prices_*.json"
-        output_path = f"s3://{SILVER_BUCKET}/cleaned_market_data.parquet"
-
-        processing_time = datetime.now(timezone.utc).isoformat()
-
-        # 4. Define the SQL Transformation
-        # Identical to the local script: Deduplication + FDV Calculation
         query = f"""
             SELECT DISTINCT
                 id as coin_id,
@@ -70,46 +56,39 @@ def process_cleaning(event, context):
                 name,
                 current_price,
                 market_cap,
-                market_cap_rank,
-
-                -- Safe FDV Logic (Handle infinite supply coins like ETH)
-                CASE 
-                    WHEN max_supply IS NULL THEN (current_price * total_supply)
-                    ELSE (current_price * max_supply)
-                END as fully_diluted_valuation,
-
-                total_volume,
-                high_24h,
-                low_24h,
-                price_change_percentage_24h,
-                circulating_supply,
-                total_supply,
-                max_supply,
                 ath,
-                ath_change_percentage,
-                ath_date,
+                -- Convert timestamps
                 last_updated as source_updated_at,
-                ingested_timestamp,
-                '{processing_time}' as processed_at
-
-            FROM read_json_auto('{source_pattern}')
-            ORDER BY source_updated_at DESC
+                current_timestamp as processed_at,
+                '{input_filename}' as ingested_file
+            FROM read_json_auto('{local_input}')
         """
 
-        print("⚙️ Executing DuckDB Transformation in Cloud.")
-
-        # 5. Execute and Save
+        # 5. Save to Local Parquet
         con.execute(f"""
             COPY ({query}) 
-            TO '{output_path}' 
+            TO '{local_output}' 
             (FORMAT 'PARQUET', CODEC 'SNAPPY')
         """)
 
-        print(f"✅ Silver Layer Complete. Saved to: {output_path}")
+        print(f"✅ Data cleaned and saved locally to {local_output}")
+
+        # 6. Upload to Silver
+        print(f"📤 Uploading to {SILVER_BUCKET}.")
+        dest_bucket = storage_client.bucket(SILVER_BUCKET)
+        dest_blob = dest_bucket.blob("cleaned_market_data.parquet")
+        dest_blob.upload_from_filename(local_output)
+
+        print("✅ Silver Layer Success.")
+
+        # Cleanup
+        if os.path.exists(local_input): os.remove(local_input)
+        if os.path.exists(local_output): os.remove(local_output)
+
         return "Success"
 
     except Exception as error:
         print(f"❌ Critical Error in Silver Cloud Function: {error}")
-        # Re-raising the error ensures Google Cloud marks this execution as 'Failed'
-        # and logs it in the Error Reporting console.
+        # Cleanup even on error
+        if os.path.exists(local_input): os.remove(local_input)
         raise error

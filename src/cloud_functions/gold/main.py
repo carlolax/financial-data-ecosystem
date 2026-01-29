@@ -1,7 +1,6 @@
 import duckdb
 import os
-import google.auth
-from google.auth.transport.requests import Request
+from google.cloud import storage
 from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
@@ -9,57 +8,55 @@ SILVER_BUCKET = os.environ.get("SILVER_BUCKET_NAME")
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET_NAME")
 WINDOW_SIZE = 7
 
-def get_gcp_credentials() -> str:
-    """
-    Fetches the automatic Service Account credentials from the Cloud Function environment.
-
-    Why:
-    DuckDB needs an 'access_token' to read/write files in Google Cloud Storage.
-    I generate this token dynamically using the function's identity (Service Account).
-    """
-    # I use '_' to ignore the project ID since I only need the credentials.
-    credentials, _ = google.auth.default()
-    credentials.refresh(Request())
-    return credentials.token
-
 def process_analysis(event, context):
     """
-    Orchestrates the Gold Layer: Financial Analysis (Cloud Function).
+    Orchestrates the Gold Layer: Financial Analysis (Stable / Local Mode).
 
     Trigger:
-        Event-Driven. Fires automatically when 'cleaned_market_data.parquet' 
-        is created in the Silver Bucket.
+        Event-Driven. Fires automatically when a file is finalized in the Silver Bucket.
 
     Workflow:
-    1. Authentication: Generates a Google Security Token for DuckDB.
-    2. Configuration: Sets up DuckDB to treat Google Cloud Storage like an S3 bucket.
-    3. Transformation: Calculates SMA (7-day) and Volatility; generates BUY/SELL signals.
-    4. Storage: Writes the result directly to the Gold Bucket.
+    1. Ingestion: Downloads the 'cleaned_market_data.parquet' from GCS to local disk (/tmp).
+       - Note: We use the native Google Cloud Storage client instead of DuckDB's 'httpfs' 
+         extension to avoid C++ threading/memory conflicts in the Cloud Function environment.
+    2. Configuration: 
+       - Limits DuckDB memory to 800MB (leaving room for Python overhead).
+       - Restricts execution to 1 thread to prevent concurrency crashes.
+    3. Transformation: 
+       - Calculates 7-Day SMA and Volatility using Window Functions.
+       - Generates BUY/SELL/WAIT signals based on Mean Reversion strategy.
+    4. Storage: Writes results to a local file, then uploads to the Gold Bucket.
     """
-    # This helps trace specific execution runs in Google Cloud Logs.
-    print(f"🚀 Event {context.event_id} triggered by file: {event['name']} in bucket: {event['bucket']}")
+    input_filename = event['name']
+    print(f"🚀 Event {context.event_id} triggered. Processing file: {input_filename}")
+
+    # setup temporary paths
+    local_input = "/tmp/input.parquet"
+    local_output = "/tmp/output.parquet"
 
     try:
-        # 1. Authenticate with Google Cloud
-        token = get_gcp_credentials()
+        # 1. Initialize GCS Client
+        storage_client = storage.Client()
 
-        # 2. Configure DuckDB (In-Memory)
+        # 2. Download Data
+        bucket = storage_client.bucket(SILVER_BUCKET)
+        blob = bucket.blob("cleaned_market_data.parquet")
+
+        if not blob.exists():
+            print(f"⚠️ File not found in {SILVER_BUCKET}. Skipping.")
+            return
+
+        print("📥 Downloading cleaned data to local disk.")
+        blob.download_to_filename(local_input)
+
+        # 3. Configure DuckDB
         con = duckdb.connect(database=":memory:")
-        con.execute("INSTALL httpfs; LOAD httpfs;")
+        con.execute("PRAGMA memory_limit='800MB';")
+        con.execute("PRAGMA threads=1;")
 
-        # Map GCS to the S3 API (Standard DuckDB pattern for GCP access)
-        con.execute(f"SET s3_region='us-central1';")
-        con.execute(f"SET s3_endpoint='storage.googleapis.com';")
-        con.execute(f"SET s3_access_token='{token}';") 
-        con.execute("SET s3_use_https=1;")
-
-        # 3. Define Paths (Direct Cloud Access)
-        source_path = f"s3://{SILVER_BUCKET}/cleaned_market_data.parquet"
-        output_path = f"s3://{GOLD_BUCKET}/analyzed_market_summary.parquet"
-        
+        # 4. Define Logic
         analysis_time = datetime.now(timezone.utc).isoformat()
-
-        # 4. Define the Analytical Query
+        
         query = f"""
             WITH metrics AS (
                 SELECT 
@@ -70,7 +67,8 @@ def process_analysis(event, context):
                     market_cap,
                     ath,
                     source_updated_at,
-                    ingested_timestamp, 
+                    -- 🟢 FIX: Changed from 'ingested_timestamp' to 'ingested_file'
+                    ingested_file, 
                     processed_at,
 
                     -- 7-Day Moving Average
@@ -86,7 +84,7 @@ def process_analysis(event, context):
                         ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as volatility_7d
-                FROM '{source_path}'
+                FROM '{local_input}'
             )
 
             SELECT 
@@ -107,7 +105,8 @@ def process_analysis(event, context):
                 END as signal,
 
                 source_updated_at,
-                ingested_timestamp,
+                -- 🟢 FIX: Select the correct column here too
+                ingested_file,
                 processed_at,
                 '{analysis_time}' as analyzed_at
 
@@ -115,16 +114,27 @@ def process_analysis(event, context):
             ORDER BY source_updated_at DESC, coin_id
         """
 
-        print("⚙️ Executing DuckDB Financial Models in Cloud.")
+        print("⚙️ Executing DuckDB Financial Models (Local Mode).")
 
-        # 5. Execute & Save (Direct Write)
+        # 5. Execute to Local File
         con.execute(f"""
             COPY ({query}) 
-            TO '{output_path}' 
+            TO '{local_output}' 
             (FORMAT 'PARQUET', CODEC 'SNAPPY')
         """)
 
-        print(f"✅ Gold Layer Complete. Saved to: {output_path}")
+        # 6. Upload Result
+        print(f"📤 Uploading results to {GOLD_BUCKET}.")
+        out_bucket = storage_client.bucket(GOLD_BUCKET)
+        out_blob = out_bucket.blob("analyzed_market_summary.parquet")
+        out_blob.upload_from_filename(local_output)
+
+        print("✅ Gold Layer Success. Pipeline Complete.")
+
+        # Cleanup
+        if os.path.exists(local_input): os.remove(local_input)
+        if os.path.exists(local_output): os.remove(local_output)
+
         return "Success"
 
     except Exception as error:
