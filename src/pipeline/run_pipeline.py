@@ -1,21 +1,44 @@
 import sys
+import argparse
 import subprocess
 import requests
 import google.auth.transport.requests
 import google.oauth2.id_token
 import shutil
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# --- SETUP ---
+# 1. Load Environment Variables from .env file
+load_dotenv()
+
+# 2. Add Project Root to Path (for local imports)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
 # --- CONFIGURATION ---
-FUNCTION_URL = "https://cdp-bronze-ingest-v2-ckqzjlvcxa-uc.a.run.app" 
+FUNCTION_URL = os.getenv("BRONZE_FUNCTION_URL")
 
+# --- LOCAL MODULES IMPORT ---
+try:
+    from src.pipeline.bronze.ingest import process_ingestion
+    from src.pipeline.silver.clean import process_cleaning
+    from src.pipeline.gold.analyze import process_analysis
+except ImportError:
+    pass # Local modules might be missing if running in a lightweight env
+
+# ==========================================
+# ☁️ CLOUD LOGIC
+# ==========================================
 def get_gcloud_token():
     """
-    Fallback Authentication: Uses the local 'gcloud' CLI.
+    Fallback Authentication: Uses the installed 'gcloud' CLI to generate a token.
     
-    Why:
+    Why this is needed:
     The standard Python Auth library often restricts User Credentials (like local 
-    'gcloud auth login' sessions) from generating OIDC Identity Tokens. 
-    The CLI tool bypasses this restriction for local development.
+    'gcloud auth login' sessions) from generating OIDC Identity Tokens directly. 
+    The CLI tool allows developers to bypass this restriction for local testing.
 
     Returns:
         str: A valid OIDC Identity Token.
@@ -24,95 +47,127 @@ def get_gcloud_token():
     if not shutil.which("gcloud"):
         print("❌ Error: 'gcloud' CLI not found on PATH.")
         return None
-
     try:
-        # Run the command: gcloud auth print-identity-token
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-identity-token"],
-            text=True
+        return subprocess.check_output(
+            ["gcloud", "auth", "print-identity-token"], text=True
         ).strip()
-        return token
     except subprocess.CalledProcessError as error:
         print(f"❌ gcloud Auth Failed: {error}")
         return None
 
 def get_id_token(url):
     """
-    Primary Authentication: Generates a Google OIDC token.
+    Generates a Google OIDC token using a Hybrid Strategy.
 
     Strategy:
     1. Try the official 'google-auth' library first.
-       - Best for Production (Cloud Run, Compute Engine, etc).
+       - Best for Production environments (Cloud Run, Compute Engine, etc).
     2. Fallback to 'gcloud' CLI if the library fails.
        - Best for Local Development (Laptop).
 
     Args:
-        url (str): The target URL (Audience) for the token.
+        url (str): The target URL (Audience) the token is intended for.
 
     Returns:
         str: A valid Bearer token for the Authorization header.
     """
     try:
-        # 1. Try the Official Python Way (Best for Production/Servers)
         auth_req = google.auth.transport.requests.Request()
-        token = google.oauth2.id_token.fetch_id_token(auth_req, url)
-        return token
+        return google.oauth2.id_token.fetch_id_token(auth_req, url)
     except Exception:
-        # 2. Fallback to CLI (Best for Local/Laptop)
-        print("⚠️  Python Auth failed (normal for local users). Switching to gcloud CLI.")
+        print("⚠️  Python Auth failed. Switching to gcloud CLI.")
         return get_gcloud_token()
 
-def trigger_cloud_pipeline():
+def run_cloud_pipeline():
     """
-    The 'Remote Control' for the Cloud Data Lakehouse.
+    Triggers the remote Cloud Data Pipeline via HTTP.
 
-    This function acts as the external trigger for the Event-Driven Architecture.
-    It performs the following client-side orchestration:
-    1. Authenticates: Uses a Hybrid Strategy (Library -> CLI Fallback).
-    2. Requests: Sends a POST request to the Bronze Layer (Ingestion Endpoint).
-    3. Validates: Checks the HTTP response to ensure the pipeline started.
-
-    Note:
-    Once triggered, the pipeline runs asynchronously in the cloud:
-    Bronze (Ingest) -> Silver (Clean) -> Gold (Financial Analysis).
+    This function acts as the 'Remote Control'. It does not process data locally;
+    instead, it sends an authenticated signal to the Cloud Bronze Layer to start
+    the Event-Driven workflow (Bronze -> Silver -> Gold).
     """
-    print(f"🚀 Connecting to Cloud Pipeline.")
+    if not FUNCTION_URL:
+        print("❌ Error: 'BRONZE_FUNCTION_URL' not found in .env file.")
+        return
+
+    print(f"\n☁️  STARTING CLOUD PIPELINE.")
     print(f"🔗 Target: {FUNCTION_URL}")
 
-    # 1. Authentication
     print("🔑 Authenticating.")
     token = get_id_token(FUNCTION_URL)
-
     if not token:
-        print("❌ Critical Auth Failure. Could not generate token.")
-        sys.exit(1)
+        print("❌ Critical Auth Failure.")
+        return
 
-    # 2. The Request
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
         print("📡 Sending Trigger.")
         response = requests.post(FUNCTION_URL, headers=headers, json={})
-
-        # 3. Handle Response
         if response.status_code == 200:
-            print("\n✅ SUCCESS! Cloud Pipeline Triggered.")
-            print("--------------------------------------------------")
+            print("✅ SUCCESS. Cloud Pipeline Triggered.")
             print(f"RESPONSE: {response.text}")
-            print("--------------------------------------------------")
-            print("💡 Monitor the 'Gold' logs in ~60 seconds for results.")
         else:
-            print(f"\n❌ FAILED. Status Code: {response.status_code}")
-            print(f"Details: {response.text}")
+            print(f"❌ FAILED. Status: {response.status_code} - {response.text}")
+    except Exception as error:
+        print(f"❌ Network Error: {error}")
+
+# ==========================================
+# 💻 LOCAL LOGIC
+# ==========================================
+def run_local_pipeline():
+    """
+    Executes the entire Data Pipeline logic locally on the host machine.
+
+    This bypasses the cloud infrastructure and runs the Python logic directly
+    using the local CPU and File System. 
+
+    Workflow:
+    1. Bronze: Calls CoinGecko API -> Saves JSON to local 'data/bronze/'
+    2. Silver: Reads JSON -> Cleans with DuckDB -> Saves Parquet to 'data/silver/'
+    3. Gold: Reads Parquet -> Analyzes with DuckDB -> Saves Report to 'data/gold/'
+    """
+    print(f"\n💻 STARTING LOCAL PIPELINE.")
+    
+    try:
+        # Step 1: Bronze Layer - Ingestion
+        print("   [1/3] Running Bronze (Ingest).")
+        raw_file = process_ingestion()
+        print(f"   ✅ Bronze Complete. File: {raw_file.name}")
+
+        # Step 2: Silver Layer - Cleaning
+        print("   [2/3] Running Silver (Clean).")
+        clean_file = process_cleaning()
+        print(f"   ✅ Silver Complete. File: {clean_file.name}")
+
+        # Step 3: Gold Layer - Analysis
+        print("   [3/3] Running Gold (Analyze).")
+        final_report = process_analysis()
+        print(f"   ✅ Gold Complete. Report: {final_report.name}")
+
+        print("🎉 Local Pipeline Finished Successfully.")
 
     except Exception as error:
-        print(f"\n❌ Network Error: {error}")
+        print(f"❌ Local Pipeline Failed: {error}")
 
+# ==========================================
+# 🎮 MAIN CONTROLLER
+# ==========================================
 if __name__ == "__main__":
-    if "PLACEHOLDER" in FUNCTION_URL:
-        print("⚠️  PLEASE UPDATE 'FUNCTION_URL' IN THE SCRIPT FIRST!")
-    else:
-        trigger_cloud_pipeline()
+    parser = argparse.ArgumentParser(description="Crypto Pipeline Controller")
+    parser.add_argument(
+        "--mode", 
+        choices=["local", "cloud", "all"], 
+        default="cloud",
+        help="Choose execution mode: 'local' (laptop), 'cloud' (GCP), or 'all' (both)."
+    )
+
+    args = parser.parse_args()
+
+    print(f"🚀 EXECUTING MODE: {args.mode.upper()}")
+
+    if args.mode in ["local", "all"]:
+        run_local_pipeline()
+
+    if args.mode in ["cloud", "all"]:
+        run_cloud_pipeline()

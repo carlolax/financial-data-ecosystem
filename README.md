@@ -52,7 +52,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 * **Data Processing:** Pandas (Ingest), DuckDB (OLAP Transformation)
 * **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
 * **Visualization:** Streamlit, Plotly
-* **Orchestration:** Eventarc (Triggers) & Custom Client Script (`run_pipeline.py`)
+* **Orchestration:** Eventarc (Triggers) & Custom Hybrid CLI (`run_pipeline.py`)
 
 ## 📂 Project Structure
 
@@ -62,6 +62,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ├── LICENSE
 ├── README.md
 ├── SECURITY.md
+├── .env                    # (Excluded from Git) Local Environment Variables
 ├── data/                   # Local data storage (for testing)
 │   ├── bronze/             # Raw JSON files
 │   ├── gold/               # Final Aggregated Parquet files
@@ -69,16 +70,15 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ├── infra/                  # Terraform Infrastructure Code
 │   ├── bronze_layer_function.zip
 │   ├── budget.tf           # Billing alerts
-│   ├── functions.tf        # Cloud Function definitions (Source Zipping + Deployment)
+│   ├── functions.tf        # Cloud Function definitions
 │   ├── gcp-key.json        # (Ignored) Service Account Key
 │   ├── gold_layer_function.zip
 │   ├── iam.tf              # Service Accounts & Permissions
 │   ├── provider.tf         # GCP Provider & Backend Config
 │   ├── scheduler.tf        # Cloud Scheduler (Cron Jobs)
 │   ├── silver_layer_function.zip
-│   ├── storage.tf          # GCS Bucket Definitions (Bronze/Silver/Gold)
+│   ├── storage.tf          # GCS Bucket Definitions
 │   ├── terraform.tfstate   # (Ignored) State file
-│   ├── terraform.tfvars    # Configuration values (Region, IDs)
 │   └── variables.tf        # Input variable declarations
 ├── src/
 │   ├── cloud_functions/    # Production-ready Cloud Functions
@@ -90,7 +90,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   ├── pipeline/           # Local Data Pipeline Logic
 │   │   ├── bronze/         # Local ingestion script (ingest.py)
 │   │   ├── gold/           # Local analytics script (analyze.py)
-│   │   ├── run_pipeline.py # Cloud Remote Control (Client-Side Trigger)
+│   │   ├── run_pipeline.py # Hybrid CLI Controller
 │   │   └── silver/         # Local cleaning script (clean.py)
 │   └── requirements.txt
 └── tests/                  # Unit Test Suite
@@ -98,70 +98,51 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
     └── test_silver.py
 ```
 
-## ⚙️ CI/CD Automation
-This project uses GitHub Actions to automate the infrastructure deployment, ensuring a "GitOps" workflow where code changes automatically reflect in the cloud.
-
-- **Workflow**: `.github/workflows/deploy.yaml`
-- **Trigger**: Pushes to the `main` branch (specifically for `infra/` or `src/cloud_functions/`).
-- **Operations**:
-    1. Setup: Authenticates via Workload Identity (Service Account Key).
-    2. Lint: Runs `terraform fmt` to ensure code quality.
-    3. Deploy: Runs `terraform apply` to update Google Cloud resources.
-    4. State Management: Terraform State is stored remotely in a GCS Bucket to allow team collaboration and persistence.
-
-## 🚀 Deployment Guide
-**Prerequisites**
+## 🚀 Deployment & Usage Guide
+1. **Setup**
+**Prerequisites**:
 - Google Cloud SDK (gcloud) installed and authenticated.
 - Terraform installed.
 - Python 3.10+ installed.
 
-### 1. Infrastructure Setup
-**Option A: Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
+**Environment Config**: Create a `.env` file in the root directory to store your Cloud Function URL:
+```bash
+BRONZE_FUNCTION_URL="[https://your-cloud-function-url-here.a.run.app](https://your-cloud-function-url-here.a.run.app)"
+```
 
-**Option B: Manual (Dev/Debug)** Navigate to the infrastructure folder and apply the Terraform configuration manually.
+2. **Infrastructure (IaC)**
+
+**Option A**: **Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
+
+**Option B**: **Manual (Dev/Debug)**
 ```bash
 cd infra
 terraform init
-terraform plan
 terraform apply
 ```
 
-### 2. Manual Trigger (Remote Control)
-You can trigger the entire cloud pipeline directly from your local machine using the custom orchestrator script. This handles OIDC authentication and sends the trigger event.
-```bash
-# Ensure you are authenticated
-gcloud auth application-default login
+3. **Pipeline Control Center (Hybrid CLI)**
 
-# Trigger the Cloud Pipeline
-python src/pipeline/run_pipeline.py
-```
+This project includes a custom CLI tool to orchestrate the pipeline in different modes.
 
-### 3. Verification & Visualization
+| Mode | Command | Description |
+|---|---|---|
+| **Cloud (Default)** | `python src/pipeline/run_pipeline.py --mode cloud` | Authenticates and triggers the live GCP pipeline. |
+| **Local** | `python src/pipeline/run_pipeline.py --mode local` | Runs the logic locally on your laptop (saves to `/data`). |
+| **All** | `python src/pipeline/run_pipeline.py --mode all` | Runs Local first, then Cloud (for comparison). |
+
+4. **Visualization**
+
 To see the results in the Strategy Command Center:
 ```bash
 # Launch the Dashboard
 streamlit run src/dashboard.py
 ```
-*Note: Use the **"Data Source"** toggle in the sidebar to switch between `CLOUD` (Live) and `LOCAL` (Dev) modes instantly.*
 
-## 🧪 Local Development
-To run the logic locally without deploying to the cloud:
-```bash
-# Activate environment
-source crypto-env/bin/activate
-
-# Run the Orchestrator
-python src/pipeline/run_pipeline.py
-```
-*Alternatively, you can run individual layers manually:*
-```bash
-python src/pipeline/bronze/ingest.py
-python src/pipeline/silver/clean.py
-python src/pipeline/gold/analyze.py
-```
+*Note: Use the "**Data Source**" toggle in the sidebar to switch between `CLOUD` (Live) and `LOCAL` (Dev) modes instantly.*
 
 ## 🛡 Security
-- **Service Account**: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
-- **Idempotency**: All functions are designed to run multiple times without corrupting data (Overwrite logic).
-- **Schema Enforcement**: Strict typing in DuckDB prevents pipeline crashes from bad API data.
-- **Secret Management**: Sensitive keys are stored in GitHub Secrets and never committed to the repository.
+- Service Account: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
+- Idempotency: All functions are designed to run multiple times without corrupting data (Overwrite logic).
+- Schema Enforcement: Strict typing in DuckDB prevents pipeline crashes from bad API data.
+- Authentication: Cloud Functions are private and require OIDC tokens; the `run_pipeline.py` script handles this securely via Google Auth libraries.
