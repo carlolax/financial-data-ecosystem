@@ -62,6 +62,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ├── LICENSE
 ├── README.md
 ├── SECURITY.md
+├── run_pipeline.py         # 🚀 Hybrid CLI Controller (Entry Point)
 ├── .env                    # (Excluded from Git) Local Environment Variables
 ├── data/                   # Local data storage (for testing)
 │   ├── bronze/             # Raw JSON files
@@ -90,7 +91,6 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   ├── pipeline/           # Local Data Pipeline Logic
 │   │   ├── bronze/         # Local ingestion script (ingest.py)
 │   │   ├── gold/           # Local analytics script (analyze.py)
-│   │   ├── run_pipeline.py # Hybrid CLI Controller
 │   │   └── silver/         # Local cleaning script (clean.py)
 │   └── requirements.txt
 └── tests/                  # Unit Test Suite
@@ -108,6 +108,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 **Environment Config**: Create a `.env` file in the root directory to store your Cloud Function URL:
 ```bash
 BRONZE_FUNCTION_URL="[https://your-cloud-function-url-here.a.run.app](https://your-cloud-function-url-here.a.run.app)"
+GOLD_BUCKET_NAME="your-gold-bucket-name"
 ```
 
 2. **Infrastructure (IaC)**
@@ -127,9 +128,9 @@ This project includes a custom CLI tool to orchestrate the pipeline in different
 
 | Mode | Command | Description |
 |---|---|---|
-| **Cloud (Default)** | `python src/pipeline/run_pipeline.py --mode cloud` | Authenticates and triggers the live GCP pipeline. |
-| **Local** | `python src/pipeline/run_pipeline.py --mode local` | Runs the logic locally on your laptop (saves to `/data`). |
-| **All** | `python src/pipeline/run_pipeline.py --mode all` | Runs Local first, then Cloud (for comparison). |
+| **Cloud (Default)** | `python run_pipeline.py --mode cloud` | Authenticates and triggers the live GCP pipeline. |
+| **Local** | `python run_pipeline.py --mode local` | Runs the logic locally on your laptop (saves to `/data`). |
+| **All** | `python run_pipeline.py --mode all` | Runs Local first, then Cloud (for comparison). |
 
 4. **Visualization**
 

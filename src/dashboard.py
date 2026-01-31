@@ -5,45 +5,73 @@ from pathlib import Path
 from google.cloud import storage
 import io
 import fastparquet
+import os
+from dotenv import load_dotenv
+
+# --- SETUP ---
+# Load environment variables (e.g. Bucket Names) from .env file
+load_dotenv()
 
 # --- CONFIGURATION ---
 ST_PAGE_TITLE = "🪙 Crypto Strategy Command Center"
-CLOUD_BUCKET_NAME = "cdp-gold-analyze-bucket"
-CLOUD_BLOB_NAME = "analytics/market_summary.parquet"
 
+# 🔑 Load Config
+# We use os.getenv to keep sensitive bucket names out of the source code
+CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
+PARQUET_FILENAME = "analyzed_market_summary.parquet" 
+
+# Define Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-LOCAL_GOLD_PATH = BASE_DIR / "data" / "gold" / "analyzed_market_data.parquet"
+LOCAL_GOLD_PATH = BASE_DIR / "data" / "gold" / PARQUET_FILENAME
 
-# Setup page config
+# Setup page config (Must be the first Streamlit command)
 st.set_page_config(page_title=ST_PAGE_TITLE, layout="wide")
 st.title(f"📊 {ST_PAGE_TITLE}")
 
 # --- DATA LOADER ---
 @st.cache_data(ttl=600)
 def load_data(source_mode):
-    # Loads Gold Layer data based on the selected mode (LOCAL or CLOUD).
+    """
+    Loads the analyzed 'Gold Layer' data based on the selected mode.
+
+    This function uses Streamlit's caching mechanism (@st.cache_data) to store 
+    the result for 10 minutes (600s). This prevents re-downloading the large 
+    Parquet file on every user interaction (clicking buttons, changing filters).
+
+    Args:
+        source_mode (str): The data source to read from. 
+                           Options: "LOCAL" (Disk) or "CLOUD" (GCS Bucket).
+
+    Returns:
+        pd.DataFrame: A pandas DataFrame containing the historical market data.
+                      Returns an empty DataFrame if the file is missing or corrupt.
+    """
+    # 1. LOCAL MODE: Read from the local 'data/gold' folder
     if source_mode == "LOCAL":
         if not LOCAL_GOLD_PATH.exists():
-            st.error(f"❌ Local file not found: {LOCAL_GOLD_PATH}.")
-            st.warning("Tip: Run 'python src/pipeline/run_pipeline.py' to generate local data.")
+            st.error(f"❌ Local file not found: {LOCAL_GOLD_PATH}")
+            st.warning("Tip: Run 'python run_pipeline.py --mode local' to generate it.")
             return pd.DataFrame()
 
         try:
             return pd.read_parquet(LOCAL_GOLD_PATH, engine='fastparquet')
         except Exception as error:
-            st.error(f"❌ Error reading local file: {error}.")
+            st.error(f"❌ Error reading local file: {error}")
             return pd.DataFrame()
 
+    # 2. CLOUD MODE: Read directly from Google Cloud Storage.
     elif source_mode == "CLOUD":
         try:
+            # Initialize Client
             storage_client = storage.Client()
             bucket = storage_client.bucket(CLOUD_BUCKET_NAME)
-            blob = bucket.blob(CLOUD_BLOB_NAME)
+            blob = bucket.blob(PARQUET_FILENAME)
 
             if not blob.exists():
-                st.error(f"❌ Cloud file not found: gs://{CLOUD_BUCKET_NAME}/{CLOUD_BLOB_NAME}")
+                st.error(f"❌ Cloud file not found: gs://{CLOUD_BUCKET_NAME}/{PARQUET_FILENAME}")
                 return pd.DataFrame()
 
+            # Download as bytes in memory
             data_bytes = blob.download_as_bytes()
             return pd.read_parquet(io.BytesIO(data_bytes), engine='fastparquet')
 
@@ -54,95 +82,137 @@ def load_data(source_mode):
 
 # --- MAIN APP ---
 def main():
+    """
+    The Main Driver Function for the Streamlit Dashboard.
+
+    Orchestrates the UI layout:
+    1. Sidebar: Controls for Data Source (Local/Cloud) and Asset Selection.
+    2. Data Loading: Fetches data via load_data().
+    3. Transformation: Filters data by the selected Coin ID.
+    4. Visualization: Renders KPI Metrics and Plotly Interactive Charts.
+    """
     # Sidebar configuration
     st.sidebar.header("⚙️ Settings")
-    
+
     # The Mode Toggle
     data_source = st.sidebar.radio(
         "Data Source:",
-        ("CLOUD", "LOCAL"),
+        ("LOCAL", "CLOUD"),
         index=0, 
         help="Switch between live Cloud Storage data and local disk data."
     )
-    
+
     # Show status badge
     if data_source == "CLOUD":
-        st.success(f"☁️ Live Mode: Connected to {CLOUD_BUCKET_NAME}.")
+        st.success(f"☁️ Live Mode: Connected to {CLOUD_BUCKET_NAME}")
     else:
-        st.info(f"🏠 Dev Mode: Reading from local disk.")
+        st.info(f"🏠 Dev Mode: Reading from local disk")
 
     # Load data
     df = load_data(data_source)
-    
+
     # --- SIDEBAR FOOTER ---
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Engine: fastparquet v{fastparquet.__version__}")
-    
+
     if df.empty:
-        st.warning("⚠️ No data available. Please check your source.")
         return
 
     # Sidebar Filters
     st.sidebar.header("🔍 Filters")
-    if 'coin_id' in df.columns:
-        all_coins = df['coin_id'].unique()
+
+    # 1. Identify Coin Column (Handles schema variations)
+    coin_col = 'symbol' if 'symbol' in df.columns else 'coin_id'
+
+    if coin_col in df.columns:
+        all_coins = df[coin_col].unique()
         selected_coin = st.sidebar.selectbox("Select Asset", all_coins, index=0)
 
-        # Filter and Sort
-        coin_df = df[df['coin_id'] == selected_coin].copy()
-        
-        if 'extraction_timestamp' in coin_df.columns:
-            coin_df = coin_df.sort_values("extraction_timestamp")
-            
-            # --- KPI METRICS ---
-            if not coin_df.empty:
-                latest = coin_df.iloc[-1]
-                
-                vol = latest.get('volatility_7d', 0.0)
-                vol_display = f"{vol:,.2f}" if pd.notna(vol) else "0.00"
+        # Filter Data for the specific coin
+        coin_df = df[df[coin_col] == selected_coin].copy()
 
-                col1, col2, col3, col4 = st.columns(4)
-                with col1: st.metric("Current Price", f"${latest.get('price_usd', 0):,.2f}")
-                with col2: st.metric("7-Day SMA", f"${latest.get('sma_7d', 0):,.2f}")
-                with col3: st.metric("Volatility Index", vol_display) 
-                with col4: st.metric("Trading Signal", latest.get('signal', 'N/A'))
+        # 2. Identify Time Column (Handles schema variations)
+        time_col = None
+        if 'ingested_timestamp' in coin_df.columns:
+            time_col = 'ingested_timestamp'
+        elif 'analyzed_at' in coin_df.columns:
+            time_col = 'analyzed_at'
+        elif 'timestamp' in coin_df.columns:
+            time_col = 'timestamp'
 
-            # --- CHART ---
-            st.subheader(f"📈 Price Trend: {selected_coin.upper()}")
+        if not time_col:
+            st.error("❌ Data missing timestamp column (checked: ingested_timestamp, analyzed_at).")
+            st.write("Available columns:", list(coin_df.columns))
+            return
 
-            fig = go.Figure()
+        # Sort by time for correct plotting
+        coin_df[time_col] = pd.to_datetime(coin_df[time_col])
+        coin_df = coin_df.sort_values(time_col)
+
+        # --- KPI METRICS ---
+        if not coin_df.empty:
+            latest = coin_df.iloc[-1]
+
+            # Safe Getters to prevent KeyErrors
+            price = latest.get('current_price', 0)
+            sma = latest.get('sma_7d', 0)
+            vol = latest.get('volatility_7d', 0.0)
+            signal = latest.get('signal', 'N/A')
+
+            vol_display = f"{vol:,.2f}" if pd.notna(vol) else "0.00"
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1: st.metric("Current Price", f"${price:,.2f}")
+            with col2: st.metric("7-Day SMA", f"${sma:,.2f}")
+            with col3: st.metric("Volatility Index", vol_display) 
+            with col4: 
+                # Color code the signal badge
+                if signal == "BUY":
+                    st.success(f"🟢 {signal}")
+                elif signal == "SELL":
+                    st.error(f"🔴 {signal}")
+                else:
+                    st.metric("Signal", signal)
+
+        # --- CHART ---
+        st.subheader(f"📈 Price Trend: {selected_coin.upper()}")
+
+        fig = go.Figure()
+
+        # Trace 1: Actual Price
+        fig.add_trace(go.Scatter(
+            x=coin_df[time_col], 
+            y=coin_df['current_price'], 
+            mode='lines+markers', 
+            name='Price', 
+            line=dict(color='#00CC96', width=2)
+        ))
+
+        # Trace 2: 7-Day SMA
+        if sma > 0:
             fig.add_trace(go.Scatter(
-                x=coin_df['extraction_timestamp'], 
-                y=coin_df['price_usd'], 
-                mode='lines', 
-                name='Price', 
-                line=dict(color='#00CC96', width=2)
-            ))
-            fig.add_trace(go.Scatter(
-                x=coin_df['extraction_timestamp'], 
+                x=coin_df[time_col], 
                 y=coin_df['sma_7d'], 
                 mode='lines', 
                 name='7-Day SMA', 
                 line=dict(color='#EF553B', dash='dash', width=2)
             ))
 
-            fig.update_layout(
-                template="plotly_dark", 
-                height=500, 
-                xaxis_title="Timestamp", 
-                yaxis_title="Price (USD)",
-                legend=dict(orientation="h", y=1.1)
-            )
+        fig.update_layout(
+            template="plotly_dark", 
+            height=500, 
+            xaxis_title="Time (Ingested)", 
+            yaxis_title="Price (USD)",
+            legend=dict(orientation="h", y=1.1)
+        )
 
-            st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-            with st.expander("See Raw Data"):
-                st.dataframe(coin_df.sort_values("extraction_timestamp", ascending=False))
-        else:
-            st.error("Data missing 'extraction_timestamp' column.")
+        # Raw Data Expander
+        with st.expander("See Raw Data"):
+            st.dataframe(coin_df.sort_values(time_col, ascending=False))
     else:
-        st.error("Data missing 'coin_id' column. Check your parquet file structure.")
+        st.error(f"Data missing '{coin_col}' column.")
 
-# Entry point for running the pipeline's dashboard.
 if __name__ == "__main__":
     main()

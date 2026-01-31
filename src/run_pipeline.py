@@ -6,27 +6,32 @@ import google.auth.transport.requests
 import google.oauth2.id_token
 import shutil
 import os
-from pathlib import Path
 from dotenv import load_dotenv
 
 # --- SETUP ---
-# 1. Load Environment Variables from .env file
 load_dotenv()
-
-# 2. Add Project Root to Path (for local imports)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(PROJECT_ROOT))
 
 # --- CONFIGURATION ---
 FUNCTION_URL = os.getenv("BRONZE_FUNCTION_URL")
 
 # --- LOCAL MODULES IMPORT ---
 try:
-    from src.pipeline.bronze.ingest import process_ingestion
-    from src.pipeline.silver.clean import process_cleaning
-    from src.pipeline.gold.analyze import process_analysis
+    from pipeline.bronze.ingest import process_ingestion
+    from pipeline.silver.clean import process_cleaning
+    from pipeline.gold.analyze import process_analysis
 except ImportError:
-    pass # Local modules might be missing if running in a lightweight env
+    # Fallback: If running from root without src on path, try appending it manually
+    # This makes the script robust regardless of how you run it.
+    sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+    try:
+        from pipeline.bronze.ingest import process_ingestion
+        from pipeline.silver.clean import process_cleaning
+        from pipeline.gold.analyze import process_analysis
+    except ImportError as error:
+        print(f"\n❌ CRITICAL ERROR: Could not import local pipeline modules.")
+        print(f"   Details: {error}")
+        print("   Make sure you are running this script from the project root.\n")
+        sys.exit(1)
 
 # ==========================================
 # ☁️ CLOUD LOGIC
@@ -34,7 +39,7 @@ except ImportError:
 def get_gcloud_token():
     """
     Fallback Authentication: Uses the installed 'gcloud' CLI to generate a token.
-    
+
     Why this is needed:
     The standard Python Auth library often restricts User Credentials (like local 
     'gcloud auth login' sessions) from generating OIDC Identity Tokens directly. 
@@ -128,7 +133,7 @@ def run_local_pipeline():
     3. Gold: Reads Parquet -> Analyzes with DuckDB -> Saves Report to 'data/gold/'
     """
     print(f"\n💻 STARTING LOCAL PIPELINE.")
-    
+
     try:
         # Step 1: Bronze Layer - Ingestion
         print("   [1/3] Running Bronze (Ingest).")
