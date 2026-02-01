@@ -9,6 +9,7 @@ on:
       - 'infra/**'
       - 'src/**'       # Trigger on source code changes
       - 'tests/**'     # Trigger on test changes
+      - '.github/workflows/**'
   workflow_dispatch:
 
 env:
