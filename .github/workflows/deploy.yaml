@@ -105,6 +105,8 @@ jobs:
     - name: Terraform Apply
       # Only run on main branch pushes
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      # Variable to prevent hanging
-      run: terraform apply -auto-approve -var="billing_account_id=01F3B9-004C24-B7B8F9"
-  
+      # Map the secret to a TF_VAR_ environment variable
+      env:
+        TF_VAR_billing_account_id: ${{ secrets.BILLING_ACCOUNT_ID }}
+      # Remove the manual -var flag.
+      run: terraform apply -auto-approve
