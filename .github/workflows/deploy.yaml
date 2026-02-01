@@ -7,7 +7,8 @@ on:
       - main
     paths:
       - 'infra/**'
-      - 'src/cloud_functions/**'
+      - 'src/**'       # Trigger on source code changes
+      - 'tests/**'     # Trigger on test changes
   workflow_dispatch:
 
 env:
@@ -33,10 +34,8 @@ jobs:
         run: |
           pip install ruff
           # Run check on the src folder. 
-          # We use --output-format=github so errors show up nicely in the UI.
+          # I use --output-format=github so errors show up nicely in the UI.
           ruff check src/ --output-format=github || true 
-        # Note: '|| true' prevents it from failing the build entirely for now
-        # Remove '|| true' later when you want to force-stop on errors.
 
       # 2. Terraform Security Scan using Trivy
       - name: Run Trivy Vulnerability Scanner
@@ -48,10 +47,35 @@ jobs:
           exit-code: '0' # Set to '1' to block deploy on security issues
           severity: 'CRITICAL,HIGH'
 
-  # 🚀 Job 2 - Deploy (Only runs if Quality Check passes)
+  # Job 2 - Unit Tests (Runs your Pytest Suite)
+  unit-tests:
+    name: '🧪 Unit Tests'
+    runs-on: ubuntu-latest
+    needs: quality-check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install testing tools + project dependencies
+          pip install pytest pytest-mock pandas duckdb requests python-dotenv
+
+      - name: Run Pytest
+        run: |
+          # The -v flag gives verbose output so you can see which tests pass
+          pytest tests/ -v
+
+  # 🚀 Job 3 - Deploy (Only runs if Quality Check AND Tests pass)
   terraform:
     name: 'Terraform Apply'
-    needs: quality-check # <--- Requirement - waits for job above
+    needs: [quality-check, unit-tests]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -82,3 +106,4 @@ jobs:
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       # Variable to prevent hanging
       run: terraform apply -auto-approve -var="billing_account_id=01F3B9-004C24-B7B8F9"
+  
