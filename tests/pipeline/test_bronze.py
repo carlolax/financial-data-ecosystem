@@ -15,7 +15,7 @@ from pipeline.bronze.ingest import process_ingestion
 def sample_coin_data():
     """
     Fixture that provides a standardized list of mock coin data.
-    
+
     Returns:
         list: A list of dictionaries representing CoinGecko API response objects.
     """
@@ -33,16 +33,16 @@ def sample_coin_data():
 def test_ingest_bronze_success(mock_makedirs, mock_open, mock_get, sample_coin_data):
     """
     Verifies the successful execution of the Bronze Layer ingestion process.
-    
+
     Scenario:
         - The API returns a valid 200 OK response with data.
         - The file system allows writing.
-        
+
     Assertions:
         1. The API endpoint (requests.get) is called.
         2. The directory creation (os.makedirs) is attempted.
         3. The file opening (open) is called with 'w' mode and a .json extension.
-        
+
     Args:
         mock_makedirs (MagicMock): Mock for os.makedirs.
         mock_open (MagicMock): Mock for builtins.open.
@@ -80,13 +80,13 @@ def test_ingest_bronze_success(mock_makedirs, mock_open, mock_get, sample_coin_d
 def test_ingest_rate_limit_error(mock_get):
     """
     Verifies that the ingestion process fails fast upon hitting a rate limit.
-    
+
     Scenario:
         - The CoinGecko API returns a 429 status code.
-        
+
     Assertions:
         - The function raises an Exception with the specific message "Rate limit hit".
-        
+
     Args:
         mock_get (MagicMock): Mock for requests.get.
     """
@@ -98,7 +98,7 @@ def test_ingest_rate_limit_error(mock_get):
     # 2. EXECUTE & ASSERT
     with pytest.raises(Exception) as excinfo:
         process_ingestion()
-    
+
     assert "Rate limit hit (429)" in str(excinfo.value)
 
 # --- TEST 3: Batching Logic ---
@@ -111,15 +111,15 @@ def test_ingest_rate_limit_error(mock_get):
 def test_ingest_batching_logic(mock_makedirs, mock_open, mock_get, mock_sleep):
     """
     Verifies the smart batching and rate-limit sleeping logic.
-    
+
     Scenario:
         - Input list has 3 coins.
         - BATCH_SIZE is mocked to 1 (forcing 3 separate batches).
-        
+
     Assertions:
         1. requests.get is called 3 times (once per batch).
         2. time.sleep is called 2 times (between Batch 1-2 and Batch 2-3, but NOT after Batch 3).
-        
+
     Args:
         mock_makedirs (MagicMock): Mock for os.makedirs.
         mock_open (MagicMock): Mock for builtins.open.
