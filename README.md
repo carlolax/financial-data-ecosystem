@@ -53,6 +53,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 * **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
 * **Visualization:** Streamlit, Plotly
 * **Orchestration:** Eventarc (Triggers) & Custom Hybrid CLI (`run_pipeline.py`)
+* **Testing:** Pytest, Mock, Unittest
 
 ## 📂 Project Structure
 
@@ -94,9 +95,33 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 │   │   └── silver/         # Local cleaning script (clean.py)
 │   └── requirements.txt
 └── tests/                  # Unit Test Suite
-    ├── test_bronze.py
-    └── test_silver.py
+    ├── __init__.py
+    └── pipeline/
+        ├── __init__.py
+        ├── test_bronze.py  # API Mocking & Rate Limit Tests
+        ├── test_gold.py    # Financial Math & Signal Logic Verification
+        └── test_silver.py  # DuckDB SQL Integration Tests
 ```
+
+## 🧪 Testing & Quality Assurance
+This project uses **Pytest** to ensure reliability across all layers of the pipeline. The test suite covers API handling, SQL logic, and financial modeling without needing to hit live cloud resources.
+
+**Run the Suite**
+```bash
+pytest
+```
+
+**Strategy**
+1. **Bronze (Ingestion)**:
+    - **Mocking**: Uses `unittest.mock` to simulate CoinGecko API responses.
+    - **Safety**: Ensures no actual HTTP requests are made during testing to prevent rate-limiting or IP bans.
+    - **Logic**: Verifies "Fail Fast" behavior on 429 errors and correct batch processing.
+2. **Silver (Processing)**:
+    - **Integration**: Uses Pytest's `tmp_path` to create temporary, real JSON files.
+    - **Engine**: Runs actual DuckDB SQL queries against these temp files to verify column cleaning, deduplication, and schema evolution.
+3. **Gold (Analytics)**:
+    - **Verification**: Uses controlled Pandas DataFrames to simulate market patterns (e.g., "Bull Run" vs "Crash").
+    - **Math**: mathematically verifies that the **7-Day SMA** and **Volatility** calculations trigger the correct `BUY` or `SELL` signals.
 
 ## 🚀 Deployment & Usage Guide
 1. **Setup**
