@@ -131,9 +131,12 @@ def main():
         # Filter Data for the specific coin
         coin_df = df[df[coin_col] == selected_coin].copy()
 
-        # 2. Identify Time Column (Handles schema variations)
+    # 2. Identify Time Column
         time_col = None
-        if 'ingested_timestamp' in coin_df.columns:
+        # PRIORITY: Use the actual source time if available!
+        if 'source_updated_at' in coin_df.columns:
+            time_col = 'source_updated_at'
+        elif 'ingested_timestamp' in coin_df.columns:
             time_col = 'ingested_timestamp'
         elif 'analyzed_at' in coin_df.columns:
             time_col = 'analyzed_at'
@@ -161,18 +164,32 @@ def main():
 
             vol_display = f"{vol:,.2f}" if pd.notna(vol) else "0.00"
 
-            col1, col2, col3, col4 = st.columns(4)
+            # RETRIEVE RSI (Safe get, default to 50 if missing)
+            rsi = latest.get('rsi_14d', 50.0)
+
+            # UPDATE: Change columns from 4 to 5
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
             with col1: st.metric("Current Price", f"${price:,.2f}")
             with col2: st.metric("7-Day SMA", f"${sma:,.2f}")
             with col3: st.metric("Volatility Index", vol_display) 
             with col4: 
-                # Color code the signal badge
                 if signal == "BUY":
                     st.success(f"🟢 {signal}")
                 elif signal == "SELL":
                     st.error(f"🔴 {signal}")
                 else:
                     st.metric("Signal", signal)
+            
+            # NEW: Add the RSI Metric
+            with col5:
+                rsi_val = f"{rsi:.1f}"
+                if rsi > 70:
+                    st.metric("14-Day RSI", rsi_val, "Overbought", delta_color="inverse")
+                elif rsi < 30:
+                    st.metric("14-Day RSI", rsi_val, "Oversold", delta_color="normal")
+                else:
+                    st.metric("14-Day RSI", rsi_val, "Neutral", delta_color="off")
 
         # --- CHART ---
         st.subheader(f"📈 Price Trend: {selected_coin.upper()}")
@@ -207,6 +224,37 @@ def main():
         )
 
         st.plotly_chart(fig, use_container_width=True)
+        
+        # New RSI Chart
+        st.subheader("📊 Momentum (RSI)")
+        
+        fig_rsi = go.Figure()
+
+        # Trace 1: RSI Line
+        fig_rsi.add_trace(go.Scatter(
+            x=coin_df[time_col],
+            y=coin_df['rsi_14d'],
+            mode='lines',
+            name='RSI',
+            line=dict(color='#AB63FA', width=2)
+        ))
+
+        # Add Reference Lines (70 and 30)
+        fig_rsi.add_hline(y=70, line_dash="dot", line_color="red", annotation_text="Overbought (70)")
+        fig_rsi.add_hline(y=30, line_dash="dot", line_color="#00CC96", annotation_text="Oversold (30)")
+
+        # Shade the "Normal" area
+        fig_rsi.add_hrect(y0=30, y1=70, line_width=0, fillcolor="rgba(255, 255, 255, 0.1)", layer="below")
+
+        fig_rsi.update_layout(
+            template="plotly_dark",
+            height=250, # Shorter chart for Oscillator
+            yaxis=dict(range=[0, 100]), # Fixed RSI Range
+            xaxis_title="Time (Ingested)",
+            margin=dict(t=20) # Tight margins
+        )
+
+        st.plotly_chart(fig_rsi, use_container_width=True)
 
         # Raw Data Expander
         with st.expander("See Raw Data"):

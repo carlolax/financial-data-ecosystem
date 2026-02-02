@@ -12,6 +12,7 @@ GOLD_DIR = BASE_DIR / "data" / "gold"
 SOURCE_FILENAME = "cleaned_market_data.parquet"
 OUTPUT_FILENAME = "analyzed_market_summary.parquet"
 WINDOW_SIZE = 7
+RSI_PERIOD = 14
 
 def get_source_file(directory: Path, filename: str) -> str:
     """
@@ -37,10 +38,17 @@ def process_analysis() -> Path:
     Workflow:
     1. Validation: Checks if Silver Parquet data exists.
     2. Logic (DuckDB Window Functions):
+       - Ensures chronological ordering of events (Defensive Sorting).
        - Calculates 7-Day Simple Moving Average (SMA).
        - Calculates Volatility (Standard Deviation).
-       - Generates Signals: 'BUY' (Dip), 'SELL' (Rally), or 'WAIT'.
-    3. Storage: Saves the result as a single Parquet file in data/gold/.
+       - Calculates 14-Day Relative Strength Index (RSI) for momentum.
+       
+    3. Signal Strategy (Mean Reversion):
+       - BUY: Price < SMA (Dip) AND RSI < 30 (Oversold).
+       - SELL: Price > SMA (Rally) AND RSI > 70 (Overbought).
+       - WAIT: All other conditions.
+
+    4. Storage: Saves the result as a single Parquet file in data/gold/.
 
     Returns:
         Path: The file path of the saved Parquet file.
@@ -57,63 +65,83 @@ def process_analysis() -> Path:
         print(error)
         raise error
 
-    # 2. Define the Analytical Query
+    # 2. Define the Analytical Query (Improved with Relative Strength Index (RSI))
     # I use Common Table Expressions (WITH clause) to calculate metrics first,
     # then use those metrics to generate the "Signal" in the final SELECT.
     query = f"""
-        WITH metrics AS (
+        WITH price_changes AS (
+            -- Step 1: Calculate the change from the previous timestamp (I will implement the sorting here.)
             SELECT 
-                coin_id,
-                symbol,
-                name,
-                current_price,
-                market_cap,
-                ath,
-                source_updated_at,
-                ingested_timestamp, 
-                processed_at,
+                *,
+                current_price - LAG(current_price) OVER (
+                    PARTITION BY coin_id ORDER BY source_updated_at
+                ) as price_diff
+            FROM '{source_path_str}'
+        ),
 
-                -- 7-Day Moving Average (The "Trend")
+        rolling_stats AS (
+            -- Step 2: Calculate SMA, Volatility, and RSI Components
+            SELECT 
+                *,
+
+                -- Existing Metrics
                 AVG(current_price) OVER (
-                    PARTITION BY coin_id 
-                    ORDER BY source_updated_at 
+                    PARTITION BY coin_id ORDER BY source_updated_at
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as sma_7d,
 
-                -- Volatility (Standard Deviation)
                 STDDEV(current_price) OVER (
-                    PARTITION BY coin_id 
-                    ORDER BY source_updated_at 
+                    PARTITION BY coin_id ORDER BY source_updated_at
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
-                ) as volatility_7d
-            FROM '{source_path_str}'
+                ) as volatility_7d,
+
+                -- RSI Components (Separate Gains and Losses)
+                AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (
+                    PARTITION BY coin_id ORDER BY source_updated_at
+                    ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
+                ) as avg_gain,
+
+                AVG(CASE WHEN price_diff < 0 THEN ABS(price_diff) ELSE 0 END) OVER (
+                    PARTITION BY coin_id ORDER BY source_updated_at
+                    ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
+                ) as avg_loss
+
+            FROM price_changes
         )
 
         SELECT 
-            -- Business Data
             coin_id,
             symbol,
-            name,
             current_price,
             market_cap,
-            ath,
+
+            -- Financial Metrics
             sma_7d,
             volatility_7d,
 
-            -- The Strategy Signal (Mean Reversion)
+            -- RSI Calculation (Avoid Division by Zero)
             CASE 
-                WHEN current_price < sma_7d AND volatility_7d > 0 THEN 'BUY'
-                WHEN current_price > sma_7d THEN 'SELL'
+                WHEN avg_loss = 0 THEN 100
+                ELSE 100 - (100 / (1 + (avg_gain / avg_loss)))
+            END as rsi_14d,
+
+            -- SMARTER Signals (Combination Strategy)
+            CASE 
+                -- BUY: Price is below trend (Dip) AND RSI is Oversold (< 30)
+                WHEN current_price < sma_7d AND (100 - (100 / (1 + (avg_gain / avg_loss)))) < 30 THEN 'BUY'
+
+                -- SELL: Price is above trend (Rally) AND RSI is Overbought (> 70)
+                WHEN current_price > sma_7d AND (100 - (100 / (1 + (avg_gain / avg_loss)))) > 70 THEN 'SELL'
+
                 ELSE 'WAIT'
             END as signal,
 
             -- Lineage
             source_updated_at,
-            ingested_timestamp,
             processed_at,
             '{analysis_time}' as analyzed_at
 
-        FROM metrics
+        FROM rolling_stats
         ORDER BY source_updated_at DESC, coin_id
     """
 
@@ -132,7 +160,8 @@ def process_analysis() -> Path:
 
         # Optional: Preview the results to prove it worked
         print("\n📊 Latest Signals Preview:")
-        duckdb.sql(f"SELECT symbol, current_price, sma_7d, signal FROM '{output_path}' LIMIT 5").show()
+        # I added 'rsi_14d' to the columns selected below
+        duckdb.sql(f"SELECT symbol, current_price, rsi_14d, signal FROM '{output_path}' LIMIT 5").show()
 
         return output_path
 
