@@ -83,9 +83,9 @@ def fetch_historical_data(coin_id: str) -> list:
                     "name": coin_id.title(),
                     "current_price": float(price),
                     "market_cap": float(mc),
-                    "ath": 0.0, 
+                    "ath": 0.0,
                     "source_updated_at": datetime.fromtimestamp(ts_ms / 1000, timezone.utc),
-                    "ingested_timestamp": datetime.now(timezone.utc),
+                    "ingested_file": "backfill_90d.json",
                     "processed_at": datetime.now(timezone.utc)
                 })
 
