@@ -79,10 +79,11 @@ def fetch_historical_data(coin_id: str) -> list:
 
                 records.append({
                     "coin_id": coin_id,
-                    "symbol": get_symbol(coin_id), 
+                    "symbol": get_symbol(coin_id),
+                    "name": coin_id.title(),
                     "current_price": float(price),
                     "market_cap": float(mc),
-                    "ath": 0.0,
+                    "ath": 0.0, 
                     "source_updated_at": datetime.fromtimestamp(ts_ms / 1000, timezone.utc),
                     "ingested_timestamp": datetime.now(timezone.utc),
                     "processed_at": datetime.now(timezone.utc)
