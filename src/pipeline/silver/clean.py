@@ -15,13 +15,13 @@ OUTPUT_FILENAME = "cleaned_market_data.parquet"
 def get_source_files_pattern(directory: Path, pattern: str) -> str:
     """
     Validates that source files exist and returns the glob pattern string for DuckDB.
-    
+
     Why:
     DuckDB needs a string pattern (like 'data/*.json') to load multiple files.
     This function ensures the directory isn't empty before I try to query it.
     """
     files_found = list(directory.glob(pattern))
-    
+
     if not files_found:
         raise FileNotFoundError(f"❌ No files found in {directory} matching '{pattern}'. Run ingestion first.")
 

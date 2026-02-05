@@ -131,7 +131,7 @@ def process_ingestion(request) -> Tuple[str, int]:
                 print(f"   😴 Sleeping {RATE_LIMIT_SECONDS}s.")
                 time.sleep(RATE_LIMIT_SECONDS)
 
-        except Exception as e:
+        except Exception as error:
             print(f"❌ Error on Batch {batch_num}: {error}")
             return f"Error: {error}", 500
 

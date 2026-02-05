@@ -42,7 +42,7 @@ def process_analysis() -> Path:
        - Calculates 7-Day Simple Moving Average (SMA).
        - Calculates Volatility (Standard Deviation).
        - Calculates 14-Day Relative Strength Index (RSI) for momentum.
-       
+
     3. Signal Strategy (Mean Reversion):
        - BUY: Price < SMA (Dip) AND RSI < 30 (Oversold).
        - SELL: Price > SMA (Rally) AND RSI > 70 (Overbought).

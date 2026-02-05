@@ -145,7 +145,7 @@ def process_analysis(event, context):
                     ) as avg_loss
                 FROM price_changes
             ),
-            
+
             final_calculations AS (
                 -- Step 3: Compute final RSI value
                 SELECT
