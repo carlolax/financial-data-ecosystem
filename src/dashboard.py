@@ -16,7 +16,7 @@ load_dotenv()
 ST_PAGE_TITLE = "🪙 Crypto Strategy Command Center"
 
 # 🔑 Load Config
-# We use os.getenv to keep sensitive bucket names out of the source code
+# I use os.getenv to keep sensitive bucket names out of the source code
 CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
 PARQUET_FILENAME = "analyzed_market_summary.parquet" 
 
@@ -169,7 +169,7 @@ def main():
 
             # UPDATE: Change columns from 4 to 5
             col1, col2, col3, col4, col5 = st.columns(5)
-            
+
             with col1: st.metric("Current Price", f"${price:,.2f}")
             with col2: st.metric("7-Day SMA", f"${sma:,.2f}")
             with col3: st.metric("Volatility Index", vol_display) 
@@ -180,7 +180,7 @@ def main():
                     st.error(f"🔴 {signal}")
                 else:
                     st.metric("Signal", signal)
-            
+
             # NEW: Add the RSI Metric
             with col5:
                 rsi_val = f"{rsi:.1f}"
@@ -224,10 +224,10 @@ def main():
         )
 
         st.plotly_chart(fig, use_container_width=True)
-        
+
         # New RSI Chart
         st.subheader("📊 Momentum (RSI)")
-        
+
         fig_rsi = go.Figure()
 
         # Trace 1: RSI Line
@@ -256,7 +256,47 @@ def main():
 
         st.plotly_chart(fig_rsi, use_container_width=True)
 
-        # Raw Data Expander
+        # Start of Heatmap Section
+        st.markdown("---")
+        st.subheader("🔥 Risk Heatmap (Correlation Matrix)")
+        st.caption("Do assets move together? (1.0 = Identical Movement, 0.0 = No Relation)")
+
+        try:
+            # 1. Preparation
+            heatmap_data = df[[time_col, coin_col, 'current_price']].copy()
+
+            # Ensure proper types
+            heatmap_data[time_col] = pd.to_datetime(heatmap_data[time_col])
+            heatmap_data['current_price'] = pd.to_numeric(heatmap_data['current_price'], errors='coerce')
+
+            # This makes BTC at 10:00:05 and ETH at 10:00:12 align on the same row.
+            heatmap_data['aligned_time'] = heatmap_data[time_col].dt.floor('h') 
+
+            # 2. Pivot
+            pivot_df = heatmap_data.pivot_table(
+                index='aligned_time', 
+                columns=coin_col, 
+                values='current_price'
+            )
+
+            # 3. Fill Gaps
+            # ffill() ensures that if a coin misses one hour, I assume price stayed stable.
+            pivot_df = pivot_df.ffill().bfill()
+
+            # 4. Calculate Correlation
+            # I need at least 2 periods of overlapping data to calculate a trend
+            corr_matrix = pivot_df.corr(min_periods=2)
+
+            # 5. Render
+            st.dataframe(
+                corr_matrix.style.format("{:.2f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-1, vmax=1),
+                use_container_width=True
+            )
+
+        except Exception as error:
+            st.warning(f"⚠️ Not enough data to generate heatmap yet. Need multiple assets. ({error})")
+
+        # Raw Data Expander (Existing Code)
         with st.expander("See Raw Data"):
             st.dataframe(coin_df.sort_values(time_col, ascending=False))
     else:
