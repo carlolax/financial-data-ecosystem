@@ -108,5 +108,6 @@ jobs:
       # Map the secret to a TF_VAR_ environment variable
       env:
         TF_VAR_billing_account_id: ${{ secrets.BILLING_ACCOUNT_ID }}
+        TF_VAR_discord_webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
       # Remove the manual -var flag.
       run: terraform apply -auto-approve

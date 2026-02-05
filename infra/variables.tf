@@ -31,4 +31,10 @@ variable "billing_account_id" {
   type        = string
 }
 
+variable "discord_webhook_url" {
+  description = "The Webhook URL for the Discord #crypto-alerts channel"
+  type        = string
+  sensitive   = true
+}
+
 # Triggering deployment run

@@ -1,13 +1,61 @@
 import duckdb
 import os
+import requests
 from google.cloud import storage
 from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
 SILVER_BUCKET = os.environ.get("SILVER_BUCKET_NAME", "cdp-silver-clean-bucket")
 GOLD_BUCKET = os.environ.get("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
+DISCORD_URL = os.environ.get("DISCORD_WEBHOOK_URL") 
 WINDOW_SIZE = 7
 RSI_PERIOD = 14
+
+def send_discord_alert(coin, price, rsi, signal):
+    """
+    Sends a formatted alert payload to a configured Discord Webhook.
+
+    This function constructs a JSON payload containing a rich embed with 
+    market data (Price, RSI, Time) and sends it via a POST request to 
+    the Discord API. It uses color coding (Green for BUY, Red for SELL) 
+    to visually distinguish signals.
+
+    Args:
+        coin (str): The symbol or name of the cryptocurrency (e.g., "BTC", "bitcoin").
+        price (float): The current market price of the asset.
+        rsi (float): The calculated Relative Strength Index (14-day).
+        signal (str): The trading signal triggering the alert (e.g., "BUY", "SELL").
+
+    Returns:
+        None: This function attempts to send a request but does not return a value. 
+              Success or failure is logged to stdout.
+    """
+    if not DISCORD_URL:
+        print("⚠️ No Discord URL set. Skipping alert.")
+        return
+
+    # Pick a color (Green for BUY, Red for SELL)
+    color = 5763719 # Color code for Green 🟩
+    if signal == "SELL": color = 15548997 # Color code for Red 🟥
+
+    payload = {
+        "username": "Crypto Alert Bot 🤖",
+        "embeds": [{
+            "title": f"🚨 {signal} SIGNAL DETECTED: {coin}",
+            "color": color,
+            "fields": [
+                {"name": "Price", "value": f"${price:,.4f}", "inline": True},
+                {"name": "RSI (14d)", "value": f"{rsi:.1f}", "inline": True},
+                {"name": "Time", "value": datetime.now().strftime("%Y-%m-%d %H:%M UTC"), "inline": False}
+            ]
+        }]
+    }
+
+    try:
+        requests.post(DISCORD_URL, json=payload)
+        print(f"🔔 Alert sent to Discord for {coin}")
+    except Exception as error:
+        print(f"❌ Failed to send alert: {error}")
 
 def process_analysis(event, context):
     """
@@ -140,6 +188,20 @@ def process_analysis(event, context):
             TO '{local_output}'
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
+
+        # Check for Alerts using Discord
+        # I query the temp file we just created to find the latest signal.
+        print("🔎 Checking for BUY signals.")
+        alert_query = f"SELECT symbol, current_price, rsi_14d, signal FROM '{local_output}' ORDER BY source_updated_at DESC LIMIT 1"
+        latest_row = con.execute(alert_query).fetchone()
+
+        if latest_row:
+            symbol, price, rsi, signal = latest_row
+            print(f"Info: Latest Signal for {symbol} is {signal}")
+            
+            # Trigger alert ONLY if it's a BUY
+            if signal == "BUY":
+                send_discord_alert(symbol, price, rsi, signal)
 
         # 6. Upload Result
         print(f"📤 Uploading results to {GOLD_BUCKET}.")

@@ -173,7 +173,8 @@ resource "google_cloudfunctions_function" "gold_analysis" {
 
   # Config: Injects bucket names so Python knows where to read/write
   environment_variables = {
-    SILVER_BUCKET_NAME = google_storage_bucket.silver_layer.name
-    GOLD_BUCKET_NAME   = google_storage_bucket.gold_layer.name
+    SILVER_BUCKET_NAME  = google_storage_bucket.silver_layer.name
+    GOLD_BUCKET_NAME    = google_storage_bucket.gold_layer.name
+    DISCORD_WEBHOOK_URL = var.discord_webhook_url
   }
 }
