@@ -75,7 +75,7 @@ jobs:
 
   # 🚀 Job 3 - Deploy (Only runs if Quality Check AND Tests pass)
   terraform:
-    name: 'Terraform Apply'
+    name: '🏗️ Terraform Apply'
     needs: [quality-check, unit-tests]
     runs-on: ubuntu-latest
     defaults:

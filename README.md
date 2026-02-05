@@ -2,7 +2,7 @@
 
 ![Build Status](https://github.com/carlolax/crypto-data-platform/actions/workflows/deploy.yaml/badge.svg)
 
-A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization.
+A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization and real-time alerting.
 
 ## 🏗 Architecture
 
@@ -31,19 +31,23 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
     * **Storage:** Google Cloud Storage (Parquet - Master History File).
     * **Function:** `cdp-silver-clean-v2`
 
-3.  **Analytics (Gold Layer):**
+3.  **Analytics & Alerting (Gold Layer):**
     * **Trigger:** Event-Driven (Fires after Silver Layer completion).
-    * **Logic:** DuckDB (SQL-on-Serverless).
+    * **Logic:** DuckDB (SQL-on-Serverless) + Python Requests.
     * **Features:**
-        * **Financial Modeling:** Calculates 7-Day Simple Moving Averages (SMA) and Volatility (Standard Deviation).
+        * **Financial Modeling:** Calculates **RSI (14-Day)**, 7-Day Simple Moving Averages (SMA), and Volatility (Standard Deviation).
         * **Algorithmic Signals:** Generates "BUY" (Dip), "SELL" (Rally), or "WAIT" signals based on Mean Reversion strategy.
+        * **Real-Time Alerts:** Automatically sends a rich notification to **Discord** when a high-confidence "BUY" signal is detected.
     * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
     * **Function:** `cdp-gold-analytics-v2`
 
 4.  **Visualization (The Command Center):**
     * **Tool:** Streamlit (Python-based UI).
     * **Mode:** Hybrid (Toggle between `LOCAL` disk data and `CLOUD` live bucket data).
-    * **Features:** Interactive Plotly charts and financial metrics.
+    * **Visuals:**
+        * Interactive Plotly Price & SMA Charts.
+        * **Momentum Oscillator (RSI)** with Overbought/Oversold zones.
+        * **Risk Heatmap:** A Correlation Matrix to analyze systemic risk and asset divergence.
 
 ## 🛠 Tech Stack
 
@@ -51,7 +55,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 * **Infrastructure:** Terraform (IaC)
 * **Data Processing:** Pandas (Ingest), DuckDB (OLAP Transformation)
 * **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
-* **Visualization:** Streamlit, Plotly
+* **Visualization:** Streamlit, Plotly, Matplotlib
 * **Orchestration:** Eventarc (Triggers) & Custom Hybrid CLI (`run_pipeline.py`)
 * **Testing:** Pytest, Mock, Unittest
 
@@ -85,7 +89,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ├── src/
 │   ├── cloud_functions/    # Production-ready Cloud Functions
 │   │   ├── bronze/         # Ingestion Logic (main.py + requirements.txt)
-│   │   ├── gold/           # Analytics Logic (main.py + requirements.txt)
+│   │   ├── gold/           # Analytics & Alerting Logic (main.py + requirements.txt)
 │   │   └── silver/         # Transformation Logic (main.py + requirements.txt)
 │   ├── dashboard.py        # Hybrid Streamlit Dashboard
 │   ├── environment.yaml    # Conda Environment
@@ -121,7 +125,7 @@ pytest
     - **Engine**: Runs actual DuckDB SQL queries against these temp files to verify column cleaning, deduplication, and schema evolution.
 3. **Gold (Analytics)**:
     - **Verification**: Uses controlled Pandas DataFrames to simulate market patterns (e.g., "Bull Run" vs "Crash").
-    - **Math**: mathematically verifies that the **7-Day SMA** and **Volatility** calculations trigger the correct `BUY` or `SELL` signals.
+    - **Math**: mathematically verifies that the **RSI**, **7-Day SMA**, and **Volatility** calculations trigger the correct `BUY` or `SELL` signals.
 
 ## 🚀 Deployment & Usage Guide
 1. **Setup**
@@ -134,13 +138,21 @@ pytest
 ```bash
 BRONZE_FUNCTION_URL="[https://your-cloud-function-url-here.a.run.app](https://your-cloud-function-url-here.a.run.app)"
 GOLD_BUCKET_NAME="your-gold-bucket-name"
+
+# Optional: Only needed for local alerting tests
+DISCORD_WEBHOOK_URL="[https://discord.com/api/webhooks/](https://discord.com/api/webhooks/)..."
 ```
 
 2. **Infrastructure (IaC)**
 
 **Option A**: **Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
 
+- *Note*: Ensure you have added `DISCORD_WEBHOOK_URL` to your GitHub Repository Secrets.
+
 **Option B**: **Manual (Dev/Debug)**
+
+1. Create a `terraform.tfvars` file in the `infra/` folder with your secrets (do not commit this file).
+2. Run:
 ```bash
 cd infra
 terraform init
@@ -168,7 +180,8 @@ streamlit run src/dashboard.py
 *Note: Use the "**Data Source**" toggle in the sidebar to switch between `CLOUD` (Live) and `LOCAL` (Dev) modes instantly.*
 
 ## 🛡 Security
-- Service Account: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
-- Idempotency: All functions are designed to run multiple times without corrupting data (Overwrite logic).
-- Schema Enforcement: Strict typing in DuckDB prevents pipeline crashes from bad API data.
-- Authentication: Cloud Functions are private and require OIDC tokens; the `run_pipeline.py` script handles this securely via Google Auth libraries.
+- **Secret Management**: Discord Webhooks and sensitive keys are injected via Environment Variables and GitHub Secrets; they are never hardcoded.
+- **Service Account**: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
+- **Idempotency**: All functions are designed to run multiple times without corrupting data (Overwrite/Update logic).
+- **Schema Enforcement**: Strict typing in DuckDB prevents pipeline crashes from bad API data.
+- **Authentication**: Cloud Functions are private and require OIDC tokens; the `run_pipeline.py` script handles this securely via Google Auth libraries.
