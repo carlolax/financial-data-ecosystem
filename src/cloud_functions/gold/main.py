@@ -198,7 +198,7 @@ def process_analysis(event, context):
         if latest_row:
             symbol, price, rsi, signal = latest_row
             print(f"Info: Latest Signal for {symbol} is {signal}")
-            
+
             # Trigger alert ONLY if it's a BUY
             if signal == "BUY":
                 send_discord_alert(symbol, price, rsi, signal)

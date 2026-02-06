@@ -17,7 +17,7 @@ ST_PAGE_TITLE = "🪙 Crypto Strategy Command Center"
 
 # 🔑 Load Config
 # I use os.getenv to keep sensitive bucket names out of the source code
-CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
+CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket-7d17cb57")
 PARQUET_FILENAME = "analyzed_market_summary.parquet" 
 
 # Define Paths
