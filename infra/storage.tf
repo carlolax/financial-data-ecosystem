@@ -1,13 +1,21 @@
 # ==========================================
-# STORAGE BUCKETS (The Data Hierarchy)
+# 🧱 STORAGE BUCKETS (The Data Hierarchy)
 # ==========================================
+
+# 0. RANDOM ID GENERATOR
+# ------------------------------------------------
+# Generates a random 4-byte hex string (e.g., "a1b2c3d4").
+# I append this to bucket names to ensure they are globally unique.
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
 
 # 1. SYSTEM BUCKET: Function Source Code
 # ------------------------------------------------
 # This bucket acts as a staging area. Terraform zips your Python code 
 # and uploads it here before deploying it to Google Cloud Functions.
 resource "google_storage_bucket" "function_source" {
-  name     = "cdp-function-source"
+  name     = "cdp-function-source-${random_id.bucket_suffix.hex}"
   location = var.region
 
   # DEV SETTING: Allows Terraform to delete the bucket even if it contains files.
@@ -23,7 +31,7 @@ resource "google_storage_bucket" "function_source" {
 # Stores the raw JSON responses exactly as they come from CoinGecko.
 # This is our "Source of Truth" if I ever need to re-process data.
 resource "google_storage_bucket" "data_lake" {
-  name          = var.bronze_bucket_name
+  name          = "${var.bronze_bucket_name}-${random_id.bucket_suffix.hex}"
   location      = var.region
   storage_class = "STANDARD"
   force_destroy = true
@@ -36,7 +44,7 @@ resource "google_storage_bucket" "data_lake" {
   versioning { enabled = true }
 
   # COST SAVING: The "Janitor".
-  # Automatically deletes raw JSON files after 30 days since I 
+  # Automatically deletes raw JSON files after 30 days since I
   # likely only need the processed version in Silver/Gold.
   lifecycle_rule {
     condition {
@@ -58,7 +66,7 @@ resource "google_storage_bucket" "data_lake" {
 # Stores the data after it has been cleaned, deduplicated, and converted
 # to Parquet format. This is the "Refined" data.
 resource "google_storage_bucket" "silver_layer" {
-  name          = var.silver_bucket_name
+  name          = "${var.silver_bucket_name}-${random_id.bucket_suffix.hex}"
   location      = var.region
   storage_class = "STANDARD"
   force_destroy = true
@@ -80,7 +88,7 @@ resource "google_storage_bucket" "silver_layer" {
 # Stores aggregated metrics (e.g., "Monthly Average Price").
 # This data is ready for dashboards and visualization tools.
 resource "google_storage_bucket" "gold_layer" {
-  name          = var.gold_bucket_name
+  name          = "${var.gold_bucket_name}-${random_id.bucket_suffix.hex}"
   location      = var.region
   force_destroy = true
 
