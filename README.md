@@ -4,60 +4,51 @@
 
 A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization and real-time alerting.
 
-## 🏗 Architecture
+## 🏗 Architecture & Design Decisions
 
 **Region:** `us-central1` (Iowa) - *Optimized for GCP Free Tier*
+
+> 🧠 **Deep Dive:** Want to know why I chose Serverless over Kubernetes? Read our **[Infrastructure Architecture Decisions](docs/infrastructure_decisions.md)**.
 
 The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next.
 
 1.  **Ingestion (Bronze Layer):**
     * **Source:** CoinGecko API (`/coins/markets` endpoint).
     * **Features:**
-        * **Rich Data:** Captures ATH, Circulating Supply, High/Low 24h, and Market Cap Rank.
-        * **Smart Batching:** Automatically splits large coin lists into chunks to ensure scalability.
-        * **Rate Limiting:** Built-in throttling to respect API limits (prevents 429 errors).
-    * **Compute:** Google Cloud Function Gen 2 (Python 3.10).
-    * **Trigger:** Cloud Scheduler (Hourly cron job) OR Client-Side Remote Control.
+        * **Smart Batching:** Automatically splits large coin lists into chunks.
+        * **Rate Limiting:** Built-in throttling to respect API limits.
     * **Storage:** Google Cloud Storage (Raw JSON).
-    * **Function:** `cdp-bronze-ingest-v2`
+    * **Trigger:** Cloud Scheduler (Hourly).
 
 2.  **Processing (Silver Layer):**
     * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
     * **Logic:** DuckDB (SQL-on-Serverless).
-    * **Stability:** Uses a **"Download → Process → Upload"** pattern to handle memory constraints and prevent C++ threading crashes in the serverless environment.
     * **Features:**
-        * **Historical Reconstruction:** Uses a "Wildcard Pattern" (`*.json`) to rebuild the entire dataset from history every run.
-        * **Schema Evolution:** Automatically handles complex fields like `ath`, `circulating_supply`, and `max_supply`.
+        * **Historical Reconstruction:** Rebuilds dataset from history every run using Wildcard Patterns.
+        * **Schema Evolution:** Handles complex fields like `ath` and `circulating_supply`.
     * **Storage:** Google Cloud Storage (Parquet - Master History File).
-    * **Function:** `cdp-silver-clean-v2`
 
 3.  **Analytics & Alerting (Gold Layer):**
     * **Trigger:** Event-Driven (Fires after Silver Layer completion).
-    * **Logic:** DuckDB (SQL-on-Serverless) + Python Requests.
+    * **Logic:** DuckDB + Python Requests.
     * **Features:**
-        * **Financial Modeling:** Calculates **RSI (14-Day)**, 7-Day Simple Moving Averages (SMA), and Volatility (Standard Deviation).
-        * **Algorithmic Signals:** Generates "BUY" (Dip), "SELL" (Rally), or "WAIT" signals based on Mean Reversion strategy.
-        * **Real-Time Alerts:** Automatically sends a rich notification to **Discord** when a high-confidence "BUY" signal is detected.
+        * **Financial Modeling:** Calculates **RSI (14-Day)**, **7-Day SMA**, and **Volatility**.
+        * **Real-Time Alerts:** Sends rich notifications to **Discord** when "BUY" signals are detected.
     * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
-    * **Function:** `cdp-gold-analytics-v2`
 
 4.  **Visualization (The Command Center):**
     * **Tool:** Streamlit (Python-based UI).
     * **Mode:** Hybrid (Toggle between `LOCAL` disk data and `CLOUD` live bucket data).
-    * **Visuals:**
-        * Interactive Plotly Price & SMA Charts.
-        * **Momentum Oscillator (RSI)** with Overbought/Oversold zones.
-        * **Risk Heatmap:** A Correlation Matrix to analyze systemic risk and asset divergence.
+    * **Visuals:** Interactive Plotly charts, Momentum Oscillators, and Risk Heatmaps.
 
 ## 🛠 Tech Stack
 
 * **Language:** Python 3.10
-* **Infrastructure:** Terraform (IaC)
+* **Infrastructure:** Terraform (IaC) - *Manages IAM, Storage, and Compute.*
 * **Data Processing:** Pandas (Ingest), DuckDB (OLAP Transformation)
 * **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
-* **Visualization:** Streamlit, Plotly, Matplotlib
+* **Visualization:** Streamlit, Plotly
 * **Orchestration:** Eventarc (Triggers) & Custom Hybrid CLI (`run_pipeline.py`)
-* **Testing:** Pytest, Mock, Unittest
 
 ## 📂 Project Structure
 
@@ -66,38 +57,32 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── README.md
-├── SECURITY.md
-├── run_pipeline.py         # 🚀 Hybrid CLI Controller (Entry Point)
-├── .env                    # (Excluded from Git) Local Environment Variables
-├── data/                   # Local data storage (for testing)
+├── docs/                   # 📚 Architecture & Design Documents
+│   └── infrastructure_decisions.md
+├── data/                   # Local data storage (for testing/hybrid mode)
 │   ├── bronze/             # Raw JSON files
 │   ├── gold/               # Final Aggregated Parquet files
 │   └── silver/             # Cleaned Parquet files
 ├── infra/                  # Terraform Infrastructure Code
-│   ├── bronze_layer_function.zip
-│   ├── budget.tf           # Billing alerts
 │   ├── functions.tf        # Cloud Function definitions
-│   ├── gcp-key.json        # (Ignored) Service Account Key
-│   ├── gold_layer_function.zip
 │   ├── iam.tf              # Service Accounts & Permissions
-│   ├── provider.tf         # GCP Provider & Backend Config
+│   ├── storage.tf          # GCS Bucket Definitions (w/ Random IDs)
 │   ├── scheduler.tf        # Cloud Scheduler (Cron Jobs)
-│   ├── silver_layer_function.zip
-│   ├── storage.tf          # GCS Bucket Definitions
-│   ├── terraform.tfstate   # (Ignored) State file
+│   ├── provider.tf         # GCP Provider & Backend Config
 │   └── variables.tf        # Input variable declarations
 ├── src/
 │   ├── cloud_functions/    # Production-ready Cloud Functions
-│   │   ├── bronze/         # Ingestion Logic (main.py + requirements.txt)
-│   │   ├── gold/           # Analytics & Alerting Logic (main.py + requirements.txt)
-│   │   └── silver/         # Transformation Logic (main.py + requirements.txt)
+│   │   ├── bronze/         # Ingestion Logic (main.py)
+│   │   ├── gold/           # Analytics & Alerting Logic (main.py)
+│   │   └── silver/         # Transformation Logic (main.py)
 │   ├── dashboard.py        # Hybrid Streamlit Dashboard
-│   ├── environment.yaml    # Conda Environment
-│   ├── pipeline/           # Local Data Pipeline Logic
-│   │   ├── bronze/         # Local ingestion script (ingest.py)
-│   │   ├── gold/           # Local analytics script (analyze.py)
-│   │   └── silver/         # Local cleaning script (clean.py)
-│   └── requirements.txt
+│   ├── pipeline/           # Local Data Pipeline Logic (Mirrors Cloud)
+│   │   ├── bronze/         # Local ingestion script
+│   │   ├── gold/           # Local analytics script
+│   │   └── silver/         # Local cleaning script
+│   ├── run_pipeline.py     # 🚀 Hybrid CLI Controller (Entry Point)
+│   └── scripts/
+│       └── backfill.py     # Utility to reload historical data
 └── tests/                  # Unit Test Suite
     ├── __init__.py
     └── pipeline/
@@ -134,22 +119,18 @@ pytest
 - Terraform installed.
 - Python 3.10+ installed.
 
-**Environment Config**: Create a `.env` file in the root directory to store your Cloud Function URL:
+**Environment Config**: Create a `.env` file in the root directory:
 ```bash
 BRONZE_FUNCTION_URL="[https://your-cloud-function-url-here.a.run.app](https://your-cloud-function-url-here.a.run.app)"
-GOLD_BUCKET_NAME="your-gold-bucket-name"
-
-# Optional: Only needed for local alerting tests
+GOLD_BUCKET_NAME="your-gold-bucket-name-[random-id]"
 DISCORD_WEBHOOK_URL="[https://discord.com/api/webhooks/](https://discord.com/api/webhooks/)..."
 ```
 
 2. **Infrastructure (IaC)**
 
-**Option A**: **Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
+**Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
 
-- *Note*: Ensure you have added `DISCORD_WEBHOOK_URL` to your GitHub Repository Secrets.
-
-**Option B**: **Manual (Dev/Debug)**
+**Manual (Dev/Debug)**
 
 1. Create a `terraform.tfvars` file in the `infra/` folder with your secrets (do not commit this file).
 2. Run:
@@ -158,6 +139,8 @@ cd infra
 terraform init
 terraform apply
 ```
+
+*Note: Buckets now use random suffixes (e.g., `cdp-bronze-lake-a1b2c3`) to ensure global uniqueness.*
 
 3. **Pipeline Control Center (Hybrid CLI)**
 
