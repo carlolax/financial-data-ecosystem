@@ -4,36 +4,42 @@
 
 A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization and real-time alerting.
 
+## 🚀 Quick Start (Makefile)
+
+This project includes a `Makefile` for streamlined developer experience.
+
+| Command | Description |
+| :--- | :--- |
+| `make setup` | Install all Python dependencies. |
+| `make local` | Run the full data pipeline locally (Ingest → Clean → Analyze). |
+| `make cloud` | Trigger the live pipeline on Google Cloud Platform. |
+| `make test` | Run the Pytest suite to verify logic. |
+| `make clean` | Remove temporary cache files. |
+
 ## 🏗 Architecture & Design Decisions
 
 **Region:** `us-central1` (Iowa) - *Optimized for GCP Free Tier*
 
-> 🧠 **Deep Dive:** Want to know why I chose Serverless over Kubernetes? Read our **[Infrastructure Architecture Decisions](docs/infrastructure_decisions.md)**.
+> 🧠 **Deep Dive:** Want to know why I chose Serverless over Kubernetes? Read my **[Infrastructure Architecture Decisions](docs/infrastructure_decisions.md)**.
 
 The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next.
 
 1.  **Ingestion (Bronze Layer):**
     * **Source:** CoinGecko API (`/coins/markets` endpoint).
-    * **Features:**
-        * **Smart Batching:** Automatically splits large coin lists into chunks.
-        * **Rate Limiting:** Built-in throttling to respect API limits.
+    * **Features:** Smart Batching & Rate Limiting.
     * **Storage:** Google Cloud Storage (Raw JSON).
     * **Trigger:** Cloud Scheduler (Hourly).
 
 2.  **Processing (Silver Layer):**
     * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
     * **Logic:** DuckDB (SQL-on-Serverless).
-    * **Features:**
-        * **Historical Reconstruction:** Rebuilds dataset from history every run using Wildcard Patterns.
-        * **Schema Evolution:** Handles complex fields like `ath` and `circulating_supply`.
+    * **Features:** Historical Reconstruction & Schema Evolution.
     * **Storage:** Google Cloud Storage (Parquet - Master History File).
 
 3.  **Analytics & Alerting (Gold Layer):**
     * **Trigger:** Event-Driven (Fires after Silver Layer completion).
     * **Logic:** DuckDB + Python Requests.
-    * **Features:**
-        * **Financial Modeling:** Calculates **RSI (14-Day)**, **7-Day SMA**, and **Volatility**.
-        * **Real-Time Alerts:** Sends rich notifications to **Discord** when "BUY" signals are detected.
+    * **Features:** Financial Modeling (RSI, SMA, Volatility) & Discord Alerts.
     * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
 
 4.  **Visualization (The Command Center):**
@@ -56,6 +62,7 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 .
 ├── CONTRIBUTING.md
 ├── LICENSE
+├── Makefile                # 🛠 Command Runner (Setup, Test, Deploy)
 ├── README.md
 ├── docs/                   # 📚 Architecture & Design Documents
 │   └── infrastructure_decisions.md
@@ -97,7 +104,7 @@ This project uses **Pytest** to ensure reliability across all layers of the pipe
 
 **Run the Suite**
 ```bash
-pytest
+make test
 ```
 
 **Strategy**
@@ -144,13 +151,12 @@ terraform apply
 
 3. **Pipeline Control Center (Hybrid CLI)**
 
-This project includes a custom CLI tool to orchestrate the pipeline in different modes.
+You can run the pipeline using the `Makefile` shortcuts:
 
 | Mode | Command | Description |
 |---|---|---|
-| **Cloud (Default)** | `python run_pipeline.py --mode cloud` | Authenticates and triggers the live GCP pipeline. |
-| **Local** | `python run_pipeline.py --mode local` | Runs the logic locally on your laptop (saves to `/data`). |
-| **All** | `python run_pipeline.py --mode all` | Runs Local first, then Cloud (for comparison). |
+| **Local** | `make cloud` | Runs the logic locally on your laptop (saves to `/data`). |
+| **Cloud** | `make local` | Authenticates and triggers the live GCP pipeline. |
 
 4. **Visualization**
 

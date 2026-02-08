@@ -2,12 +2,12 @@
 
 ## 1. High-Level Strategy: "Serverless First"
 This project utilizes a **Serverless Architecture** on Google Cloud Platform (GCP). 
-By choosing Serverless over traditional VM-based infrastructure, we shift the operational burden (patching, networking, scaling) to the cloud provider, allowing us to focus purely on **Data Quality** and **Business Logic**.
+By choosing Serverless over traditional VM-based infrastructure, I shift the operational burden (patching, networking, scaling) to the cloud provider, allowing me to focus purely on **Data Quality** and **Business Logic**.
 
 ## 2. The "Big 6" Infrastructure Mapping
 How this project fulfills core infrastructure requirements without managing servers:
 
-| Requirement | Traditional Approach (VMs) | Our Approach (Serverless) | Benefit |
+| Requirement | Traditional Approach (VMs) | My Approach (Serverless) | Benefit |
 | :--- | :--- | :--- | :--- |
 | **Compute** | EC2 / Compute Engine | **Cloud Functions (Python)** | Zero idle cost; automatic scaling from 0 to 1000+. |
 | **Network** | VPCs, Subnets, Firewalls | **IAM & Service Accounts** | Security is identity-based, not IP-based. |
