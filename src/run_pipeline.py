@@ -13,6 +13,8 @@ load_dotenv()
 
 # --- CONFIGURATION ---
 FUNCTION_URL = os.getenv("BRONZE_FUNCTION_URL")
+GOLD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "Unknown Bucket")
+DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 
 # --- LOCAL MODULES IMPORT ---
 try:
@@ -80,7 +82,8 @@ def get_id_token(url):
         auth_req = google.auth.transport.requests.Request()
         return google.oauth2.id_token.fetch_id_token(auth_req, url)
     except Exception:
-        print("⚠️  Python Auth failed. Switching to gcloud CLI.")
+        if DEBUG_MODE:
+            print("⚠️  Python Auth library failed. Switching to gcloud CLI.")
         return get_gcloud_token()
 
 def run_cloud_pipeline():
@@ -93,6 +96,7 @@ def run_cloud_pipeline():
     """
     if not FUNCTION_URL:
         print("❌ Error: 'BRONZE_FUNCTION_URL' not found in .env file.")
+        print("   Please create a .env file based on .env.example")
         return
 
     print(f"\n☁️  STARTING CLOUD PIPELINE.")
@@ -100,20 +104,28 @@ def run_cloud_pipeline():
 
     print("🔑 Authenticating.")
     token = get_id_token(FUNCTION_URL)
+
     if not token:
-        print("❌ Critical Auth Failure.")
+        print("❌ Critical Auth Failure: Could not generate OIDC token.")
         return
+
+    if DEBUG_MODE:
+        print(f"🐞 DEBUG: Token generated (Length: {len(token)})")
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
         print("📡 Sending Trigger.")
         response = requests.post(FUNCTION_URL, headers=headers, json={})
+
         if response.status_code == 200:
             print("✅ SUCCESS. Cloud Pipeline Triggered.")
-            print(f"RESPONSE: {response.text}")
+            if DEBUG_MODE:
+                print(f"🐞 DEBUG Response: {response.text}")
         else:
-            print(f"❌ FAILED. Status: {response.status_code} - {response.text}")
+            print(f"❌ FAILED. Status: {response.status_code}")
+            print(f"   Details: {response.text}")
+
     except Exception as error:
         print(f"❌ Network Error: {error}")
 
@@ -133,27 +145,37 @@ def run_local_pipeline():
     3. Gold: Reads Parquet -> Analyzes with DuckDB -> Saves Report to 'data/gold/'
     """
     print(f"\n💻 STARTING LOCAL PIPELINE.")
+    print(f"📂 Storage Target: Local Disk + {GOLD_BUCKET_NAME} (Reference)")
 
     try:
         # Step 1: Bronze Layer - Ingestion
         print("   [1/3] Running Bronze (Ingest).")
         raw_file = process_ingestion()
-        print(f"   ✅ Bronze Complete. File: {raw_file.name}")
+
+        # Check if process_ingestion returned a file or just a path string
+        # (Handling both cases for robustness)
+        filename = getattr(raw_file, 'name', str(raw_file))
+        print(f"   ✅ Bronze Complete. File: {filename}")
 
         # Step 2: Silver Layer - Cleaning
         print("   [2/3] Running Silver (Clean).")
         clean_file = process_cleaning()
-        print(f"   ✅ Silver Complete. File: {clean_file.name}")
+        filename = getattr(clean_file, 'name', str(clean_file))
+        print(f"   ✅ Silver Complete. File: {filename}")
 
         # Step 3: Gold Layer - Analysis
         print("   [3/3] Running Gold (Analyze).")
         final_report = process_analysis()
-        print(f"   ✅ Gold Complete. Report: {final_report.name}")
+        filename = getattr(final_report, 'name', str(final_report))
+        print(f"   ✅ Gold Complete. Report: {filename}")
 
-        print("🎉 Local Pipeline Finished Successfully.")
+        print("\n🎉 Local Pipeline Finished Successfully.")
 
     except Exception as error:
-        print(f"❌ Local Pipeline Failed: {error}")
+        print(f"\n❌ Local Pipeline Failed: {error}")
+        if DEBUG_MODE:
+            import traceback
+            traceback.print_exc()
 
 # ==========================================
 # 🎮 MAIN CONTROLLER
@@ -169,7 +191,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    print(f"🚀 EXECUTING MODE: {args.mode.upper()}")
+    # --- STARTUP SUMMARY ---
+    print("="*40)
+    print(f"🚀 CRYPTO PIPELINE CONTROLLER")
+    print(f"   Mode:  {args.mode.upper()}")
+    print(f"   Debug: {DEBUG_MODE}")
+    print(f"   Bucket: {GOLD_BUCKET_NAME}")
+    print("="*40)
 
     if args.mode in ["local", "all"]:
         run_local_pipeline()

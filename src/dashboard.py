@@ -17,8 +17,8 @@ ST_PAGE_TITLE = "🪙 Crypto Strategy Command Center"
 
 # 🔑 Load Config
 # I use os.getenv to keep sensitive bucket names out of the source code
-CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket-7d17cb57")
-PARQUET_FILENAME = "analyzed_market_summary.parquet" 
+CLOUD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME")
+PARQUET_FILENAME = "analyzed_market_summary.parquet"
 
 # Define Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -101,6 +101,12 @@ def main():
         index=0, 
         help="Switch between live Cloud Storage data and local disk data."
     )
+
+    # I check this after the user selects a mode
+    if data_source == "CLOUD" and not CLOUD_BUCKET_NAME:
+        st.error("❌ GOLD_BUCKET_NAME not found in environment variables.")
+        st.info("Please create a .env file with your bucket name.")
+        st.stop()
 
     # Show status badge
     if data_source == "CLOUD":
