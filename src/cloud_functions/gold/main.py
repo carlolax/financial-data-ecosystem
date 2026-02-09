@@ -66,7 +66,7 @@ def process_analysis(event, context):
 
     Workflow:
     1. Ingestion: Downloads the 'cleaned_market_data.parquet' from GCS to local disk (/tmp).
-       - Note: We use the native Google Cloud Storage client instead of DuckDB's 'httpfs' 
+       - Note: I use the native Google Cloud Storage client instead of DuckDB's 'httpfs' 
          extension to avoid C++ threading/memory conflicts in the Cloud Function environment.
     2. Configuration: 
        - Limits DuckDB memory to 800MB (leaving room for Python overhead).
@@ -89,9 +89,7 @@ def process_analysis(event, context):
 
         # 1. Download data from Silver layer
         silver_bucket = storage_client.bucket(SILVER_BUCKET)
-        new_blob = silver_bucket.blob(input_filename)
-        new_blob.download_to_filename(local_new_data)
-        print(f"📥 Downloaded New Data: {input_filename}")
+        silver_bucket.blob(input_filename).download_to_filename(local_new_data)
 
         # 2. Download history data
         gold_bucket = storage_client.bucket(GOLD_BUCKET)
@@ -110,13 +108,20 @@ def process_analysis(event, context):
         con.execute("PRAGMA memory_limit='800MB';")
 
         # 4. Define Table Loading Logic
+        # I explicitly select ONLY the raw columns that exist in both files.
+        # This prevents the "Binder Error" (Schema Mismatch).
+        common_columns = """
+            coin_id, symbol, name, current_price, market_cap, ath, 
+            source_updated_at, ingested_file, processed_at
+        """
+
         # If I have history, I will UNION them. If not, just use new data.
         if has_history:
             con.execute(f"""
                 CREATE TABLE raw_combined AS 
-                SELECT * FROM '{local_history}'
+                SELECT {common_columns} FROM '{local_history}'
                 UNION ALL 
-                SELECT * FROM '{local_new_data}'
+                SELECT {common_columns} FROM '{local_new_data}'
             """)
         else:
             con.execute(f"CREATE TABLE raw_combined AS SELECT * FROM '{local_new_data}'")
@@ -126,110 +131,56 @@ def process_analysis(event, context):
 
         query = f"""
             WITH deduplicated_data AS (
-                -- Safety: Ensure no duplicate rows if we re-process a file
                 SELECT DISTINCT * FROM raw_combined
             ),
-
             price_changes AS (
-                SELECT 
-                    *,
-                    current_price - LAG(current_price) OVER (
-                        PARTITION BY coin_id ORDER BY source_updated_at
-                    ) as price_diff
+                SELECT *,
+                    current_price - LAG(current_price) OVER (PARTITION BY coin_id ORDER BY source_updated_at) as price_diff
                 FROM deduplicated_data
             ),
-
             rolling_stats AS (
-                SELECT 
-                    *,
-                    AVG(current_price) OVER (
-                        PARTITION BY coin_id ORDER BY source_updated_at 
-                        ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
-                    ) as sma_7d,
-
-                    AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (
-                        PARTITION BY coin_id ORDER BY source_updated_at
-                        ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
-                    ) as avg_gain,
-
-                    AVG(CASE WHEN price_diff < 0 THEN ABS(price_diff) ELSE 0 END) OVER (
-                        PARTITION BY coin_id ORDER BY source_updated_at
-                        ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
-                    ) as avg_loss
+                SELECT *,
+                    AVG(current_price) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW) as sma_7d,
+                    AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW) as avg_gain,
+                    AVG(CASE WHEN price_diff < 0 THEN ABS(price_diff) ELSE 0 END) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW) as avg_loss
                 FROM price_changes
             ),
-
             final_calculations AS (
-                SELECT
-                    *,
-                    CASE 
-                        WHEN avg_loss = 0 THEN 100
-                        ELSE 100 - (100 / (1 + (avg_gain / avg_loss)))
-                    END as rsi_14d
+                SELECT *,
+                    CASE WHEN avg_loss = 0 THEN 100 ELSE 100 - (100 / (1 + (avg_gain / avg_loss))) END as rsi_14d
                 FROM rolling_stats
             )
-
             SELECT 
                 coin_id, symbol, name, current_price, market_cap, ath, 
                 sma_7d, rsi_14d,
-
-                -- Generate Signal
                 CASE 
                     WHEN current_price < sma_7d AND rsi_14d < 30 THEN 'BUY'
                     WHEN current_price > sma_7d AND rsi_14d > 70 THEN 'SELL'
                     ELSE 'WAIT'
                 END as signal,
-
                 source_updated_at, ingested_file, processed_at,
                 '{analysis_time}' as analyzed_at
-
             FROM final_calculations
-            -- Optimization: Keep only the last 30 days of history to prevent unlimited growth
-            -- (Assuming roughly 144 records per day per coin, 30 days ~ 4500 rows/coin)
             QUALIFY ROW_NUMBER() OVER (PARTITION BY coin_id ORDER BY source_updated_at DESC) <= 500
             ORDER BY source_updated_at DESC, coin_id
         """
 
-        print("⚙️ Executing DuckDB Financial Models.")
-
-        con.execute(f"""
-            COPY ({query})
-            TO '{local_output}'
-            (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
-        """)
+        con.execute(f"COPY ({query}) TO '{local_output}' (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')")
 
         # 6. Check alerts
-        print("🔎 Checking for new BUY signals.")
+        latest_row = con.execute(f"SELECT symbol, current_price, rsi_14d, signal FROM '{local_output}' ORDER BY source_updated_at DESC LIMIT 1").fetchone()
 
-        # Get the timestamp of the new file I just ingested to verify freshness.
-        alert_query = """
-            SELECT symbol, current_price, rsi_14d, signal 
-            FROM raw_combined 
-            ORDER BY source_updated_at DESC 
-            LIMIT 1
-        """
-        latest_row = con.execute(alert_query).fetchone()
-
-        if latest_row:
-            symbol, price, rsi, signal = latest_row
-            print(f"Info: Latest Signal for {symbol} is {signal} (RSI: {rsi})")
-
-            # Logic: Alert if BUY
-            if signal == "BUY":
-                send_discord_alert(symbol, price, rsi, signal)
+        if latest_row and latest_row[3] == "BUY":
+            send_discord_alert(latest_row[0], latest_row[1], latest_row[2], latest_row[3])
 
         # 7. Save State
-        print(f"📤 Updating Gold State: {STATE_FILENAME}")
-        out_blob = gold_bucket.blob(STATE_FILENAME)
-        out_blob.upload_from_filename(local_output)
-
+        gold_bucket.blob(STATE_FILENAME).upload_from_filename(local_output)
         print("✅ Gold Layer Success. State Updated.")
 
         # Cleanup
         if os.path.exists(local_new_data): os.remove(local_new_data)
         if os.path.exists(local_history): os.remove(local_history)
         if os.path.exists(local_output): os.remove(local_output)
-
         return "Success"
 
     except Exception as error:

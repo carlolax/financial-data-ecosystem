@@ -59,7 +59,12 @@ def process_analysis() -> Path:
     # Strategy: I load ALL silver files as "New Data" for the local test.
     # In a real incremental run, you'd be more selective, but this ensures full coverage.
     print("   Loading Silver Data.")
-    con.execute(f"CREATE OR REPLACE TABLE raw_silver AS SELECT * FROM '{SILVER_DIR}/clean_prices_*.parquet'")
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE raw_silver AS 
+        SELECT *, filename as ingested_file 
+        FROM read_parquet('{SILVER_DIR}/clean_prices_*.parquet', filename=true)
+    """)
 
     # 5. The Financial Query
     analysis_time = datetime.now(timezone.utc).isoformat()
