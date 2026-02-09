@@ -28,7 +28,6 @@ def process_cleaning(event, context):
 
     # Define temporary local paths
     local_input = f"/tmp/{input_filename}"
-    local_output = f"/tmp/cleaned_market_data.parquet"
 
     try:
         # 1. Initialize GCS Client
@@ -43,7 +42,7 @@ def process_cleaning(event, context):
 
         # 3. Configure DuckDB
         con = duckdb.connect(database=":memory:")
-        con.execute("PRAGMA memory_limit='800MB';")
+        con.execute("PRAGMA memory_limit='512MB';")
         con.execute("PRAGMA threads=1;")
 
         # 4. Clean Data
@@ -64,7 +63,11 @@ def process_cleaning(event, context):
             FROM read_json_auto('{local_input}')
         """
 
-        # 5. Save to Local Parquet
+        # 5. Save to Local Parquet (With Dynamic Name)
+        # raw_prices_2025...json -> clean_prices_2025...parquet
+        output_filename = input_filename.replace("raw_", "clean_").replace(".json", ".parquet")
+        local_output = f"/tmp/{output_filename}"
+
         con.execute(f"""
             COPY ({query}) 
             TO '{local_output}' 
@@ -76,10 +79,11 @@ def process_cleaning(event, context):
         # 6. Upload to Silver
         print(f"📤 Uploading to {SILVER_BUCKET}.")
         dest_bucket = storage_client.bucket(SILVER_BUCKET)
-        dest_blob = dest_bucket.blob("cleaned_market_data.parquet")
+        dest_blob = dest_bucket.blob(output_filename)
+
         dest_blob.upload_from_filename(local_output)
 
-        print("✅ Silver Layer Success.")
+        print(f"✅ Silver Layer Success: Saved as {output_filename}")
 
         # Cleanup
         if os.path.exists(local_input): os.remove(local_input)
