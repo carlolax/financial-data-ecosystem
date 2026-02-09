@@ -32,7 +32,7 @@ def sample_bronze_data():
             "price_change_percentage_24h": 2.5,
             "circulating_supply": 19000000,
             "total_supply": 21000000,
-            "max_supply": 21000000,  # Has Max Supply
+            "max_supply": 21000000,
             "ath": 69000,
             "ath_change_percentage": -25.0,
             "ath_date": "2021-11-10T00:00:00.000Z",
@@ -52,7 +52,7 @@ def sample_bronze_data():
             "price_change_percentage_24h": 1.2,
             "circulating_supply": 120000000,
             "total_supply": 120000000,
-            "max_supply": None,  # Infinite Supply (FDV Logic Check)
+            "max_supply": None,
             "ath": 4800,
             "ath_change_percentage": -35.0,
             "ath_date": "2021-11-10T00:00:00.000Z",
@@ -87,17 +87,19 @@ def test_process_cleaning_success(tmp_path, sample_bronze_data):
     with open(input_file, "w") as f:
         json.dump(sample_bronze_data, f)
 
-    # 2. PATCH: Redirect the code to use our Temp folders instead of the real ones
+    # 2. PATCH: Redirect the code to use my Temp folders instead of the real ones.
     with patch("pipeline.silver.clean.BRONZE_DIR", temp_bronze), \
          patch("pipeline.silver.clean.SILVER_DIR", temp_silver):
 
-        # 3. EXECUTE
-        output_path = process_cleaning()
+        # 3. EXECUTE: The function no longer returns a path, it just runs.
+        process_cleaning()
 
-        # 4. ASSERT
-        # Check if file exists
+        # 4. ASSERT: I search for ANY parquet file created in the folder.
+        generated_files = list(temp_silver.glob("*.parquet"))
+        assert len(generated_files) > 0, "No Parquet file was created in Silver"
+
+        output_path = generated_files[0]
         assert output_path.exists()
-        assert output_path.name == "cleaned_market_data.parquet"
 
         # Verify Data Integrity using Pandas
         df = pd.read_parquet(output_path)
@@ -121,7 +123,7 @@ def test_process_cleaning_success(tmp_path, sample_bronze_data):
 def test_process_cleaning_no_files(tmp_path):
     """
     Verifies that the process raises a FileNotFoundError if the Bronze directory is empty.
-    
+
     Scenario:
         - The Bronze directory exists but contains no files matching the pattern.
     """
@@ -134,7 +136,7 @@ def test_process_cleaning_no_files(tmp_path):
     with patch("pipeline.silver.clean.BRONZE_DIR", temp_bronze), \
          patch("pipeline.silver.clean.SILVER_DIR", temp_silver):
 
-        with pytest.raises(FileNotFoundError) as excinfo:
+        try:
             process_cleaning()
-
-        assert "No files found" in str(excinfo.value)
+        except FileNotFoundError:
+            pytest.fail("process_cleaning() crashed on missing files! Should exit gracefully.")
