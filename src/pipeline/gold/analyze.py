@@ -9,27 +9,9 @@ SILVER_DIR = BASE_DIR / "data" / "silver"
 GOLD_DIR = BASE_DIR / "data" / "gold"
 
 # --- CONSTANTS ---
-SOURCE_FILENAME = "cleaned_market_data.parquet"
-OUTPUT_FILENAME = "analyzed_market_summary.parquet"
 WINDOW_SIZE = 7
 RSI_PERIOD = 14
-
-def get_source_file(directory: Path, filename: str) -> str:
-    """
-    Validates that the source file exists before attempting to read it.
-
-    Why:
-    DuckDB needs a valid file path to run the query. If the file is missing
-    (e.g., the Silver layer hasn't run), I want to fail fast with a clear error
-    instead of letting DuckDB crash with a confusing message.
-    """
-    file_path = directory / filename
-
-    if not file_path.exists():
-        raise FileNotFoundError(f"❌ No Silver file found at {file_path}. Run cleaning first.")
-
-    print(f"📖 Reading historical data from: {filename}")
-    return str(file_path)
+STATE_FILENAME = "analyzed_market_summary.parquet"
 
 def process_analysis() -> Path:
     """
@@ -53,49 +35,59 @@ def process_analysis() -> Path:
     Returns:
         Path: The file path of the saved Parquet file.
     """
-    print("🚀 Starting Gold Layer - Data Analysis.")
+    print("🚀 Starting Gold Layer - Financial Analysis.")
 
     # 1. Setup
-    analysis_time = datetime.now(timezone.utc).isoformat()
     os.makedirs(GOLD_DIR, exist_ok=True)
+    history_path = GOLD_DIR / STATE_FILENAME
 
-    try:
-        source_path_str = get_source_file(SILVER_DIR, SOURCE_FILENAME)
-    except Exception as error:
-        print(error)
-        raise error
+    # 2. Find ALL Silver Files (New Data)
+    # In a real run, I might only want 'new' files, but for local testing, 
+    # I usually re-process everything to see how the logic holds up.
+    silver_files = list(SILVER_DIR.glob("clean_prices_*.parquet"))
 
-    # 2. Define the Analytical Query (Improved with Relative Strength Index (RSI))
-    # I use Common Table Expressions (WITH clause) to calculate metrics first,
-    # then use those metrics to generate the "Signal" in the final SELECT.
+    if not silver_files:
+        print(f"❌ No Silver data found in {SILVER_DIR}")
+        return
+
+    print(f"🔎 Found {len(silver_files)} silver files to process.")
+
+    # 3. Configure DuckDB
+    con = duckdb.connect(database=":memory:")
+
+    # 4. Load Data (History + New)
+    # Strategy: I load ALL silver files as "New Data" for the local test.
+    # In a real incremental run, you'd be more selective, but this ensures full coverage.
+    print("   Loading Silver Data.")
+    con.execute(f"CREATE OR REPLACE TABLE raw_silver AS SELECT * FROM '{SILVER_DIR}/clean_prices_*.parquet'")
+
+    # 5. The Financial Query
+    analysis_time = datetime.now(timezone.utc).isoformat()
+
     query = f"""
-        WITH price_changes AS (
-            -- Step 1: Calculate the change from the previous timestamp (I will implement the sorting here.)
+        WITH deduplicated_data AS (
+            SELECT DISTINCT * FROM raw_silver
+        ),
+
+        price_changes AS (
             SELECT 
                 *,
                 current_price - LAG(current_price) OVER (
                     PARTITION BY coin_id ORDER BY source_updated_at
                 ) as price_diff
-            FROM '{source_path_str}'
+            FROM deduplicated_data
         ),
 
         rolling_stats AS (
-            -- Step 2: Calculate SMA, Volatility, and RSI Components
             SELECT 
                 *,
-
-                -- Existing Metrics
+                -- 7-Day SMA
                 AVG(current_price) OVER (
-                    PARTITION BY coin_id ORDER BY source_updated_at
+                    PARTITION BY coin_id ORDER BY source_updated_at 
                     ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                 ) as sma_7d,
 
-                STDDEV(current_price) OVER (
-                    PARTITION BY coin_id ORDER BY source_updated_at
-                    ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
-                ) as volatility_7d,
-
-                -- RSI Components (Separate Gains and Losses)
+                -- RSI Components
                 AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (
                     PARTITION BY coin_id ORDER BY source_updated_at
                     ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
@@ -105,68 +97,58 @@ def process_analysis() -> Path:
                     PARTITION BY coin_id ORDER BY source_updated_at
                     ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
                 ) as avg_loss
-
             FROM price_changes
+        ),
+
+        final_calculations AS (
+            SELECT
+                *,
+                CASE 
+                    WHEN avg_loss = 0 THEN 100
+                    ELSE 100 - (100 / (1 + (avg_gain / avg_loss)))
+                END as rsi_14d
+            FROM rolling_stats
         )
 
         SELECT 
-            coin_id,
-            symbol,
-            current_price,
-            market_cap,
+            coin_id, symbol, name, current_price, market_cap, ath, 
+            sma_7d, rsi_14d,
 
-            -- Financial Metrics
-            sma_7d,
-            volatility_7d,
-
-            -- RSI Calculation (Avoid Division by Zero)
+            -- Generate Signal
             CASE 
-                WHEN avg_loss = 0 THEN 100
-                ELSE 100 - (100 / (1 + (avg_gain / avg_loss)))
-            END as rsi_14d,
-
-            -- SMARTER Signals (Combination Strategy)
-            CASE 
-                -- BUY: Price is below trend (Dip) AND RSI is Oversold (< 30)
-                WHEN current_price < sma_7d AND (100 - (100 / (1 + (avg_gain / avg_loss)))) < 30 THEN 'BUY'
-
-                -- SELL: Price is above trend (Rally) AND RSI is Overbought (> 70)
-                WHEN current_price > sma_7d AND (100 - (100 / (1 + (avg_gain / avg_loss)))) > 70 THEN 'SELL'
-
+                WHEN current_price < sma_7d AND rsi_14d < 30 THEN 'BUY'
+                WHEN current_price > sma_7d AND rsi_14d > 70 THEN 'SELL'
                 ELSE 'WAIT'
             END as signal,
 
-            -- Lineage
-            source_updated_at,
-            processed_at,
+            source_updated_at, ingested_file, processed_at,
             '{analysis_time}' as analyzed_at
 
-        FROM rolling_stats
+        FROM final_calculations
         ORDER BY source_updated_at DESC, coin_id
     """
 
-    # 3. Execute and Save
-    output_path = GOLD_DIR / OUTPUT_FILENAME
-    print("⚙️  Running financial models in DuckDB.")
+    print("⚙️  Executing DuckDB Financial Models.")
 
+    # 6. Execute and Update State
     try:
-        duckdb.execute(f"""
-            COPY ({query}) 
-            TO '{output_path}' 
+        con.execute(f"""
+            COPY ({query})
+            TO '{history_path}'
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
 
-        print(f"✅ Gold Layer Complete. Saved to: {output_path}")
+        print(f"✅ Gold Layer Success. Market State updated at: {history_path}")
 
-        # Optional: Preview the results to prove it worked
-        print("\n📊 Latest Signals Preview:")
-        # I added 'rsi_14d' to the columns selected below
-        duckdb.sql(f"SELECT symbol, current_price, rsi_14d, signal FROM '{output_path}' LIMIT 5").show()
-
-        return output_path
+        # 7. Peek at the results (Debug)
+        print("\n🔎 Latest Signals (Top 3):")
+        con.execute(f"SELECT symbol, current_price, rsi_14d, signal, source_updated_at FROM '{history_path}' ORDER BY source_updated_at DESC LIMIT 3")
+        results = con.fetchall()
+        for row in results:
+            print(f"   {row}")
 
     except Exception as error:
-        print(f"❌ Error during analysis: {error}")
+        print(f"❌ Error in Gold Layer: {error}")
         raise error
 
 if __name__ == "__main__":

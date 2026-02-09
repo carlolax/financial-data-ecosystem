@@ -10,6 +10,7 @@ GOLD_BUCKET = os.environ.get("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
 DISCORD_URL = os.environ.get("DISCORD_WEBHOOK_URL") 
 WINDOW_SIZE = 7
 RSI_PERIOD = 14
+STATE_FILENAME = "analyzed_market_summary.parquet"
 
 def send_discord_alert(coin, price, rsi, signal):
     """
@@ -34,9 +35,8 @@ def send_discord_alert(coin, price, rsi, signal):
         print("⚠️ No Discord URL set. Skipping alert.")
         return
 
-    # Pick a color (Green for BUY, Red for SELL)
-    color = 5763719 # Color code for Green 🟩
-    if signal == "SELL": color = 15548997 # Color code for Red 🟥
+    # Pick a color (🟩 Green for BUY, 🟥 Red for SELL)
+    color = 5763719 if signal == "BUY" else 15548997
 
     payload = {
         "username": "Crypto Alert Bot 🤖",
@@ -52,7 +52,7 @@ def send_discord_alert(coin, price, rsi, signal):
     }
 
     try:
-        requests.post(DISCORD_URL, json=payload)
+        requests.post(DISCORD_URL, json=payload, timeout=5)
         print(f"🔔 Alert sent to Discord for {coin}")
     except Exception as error:
         print(f"❌ Failed to send alert: {error}")
@@ -77,63 +77,76 @@ def process_analysis(event, context):
     4. Storage: Writes results to a local file, then uploads to the Gold Bucket.
     """
     input_filename = event['name']
-    print(f"🚀 Event {context.event_id} triggered. Processing file: {input_filename}")
+    print(f"🚀 Event {context.event_id} triggered. Processing update: {input_filename}")
 
-    # setup temporary paths
-    local_input = "/tmp/input.parquet"
+    # Setup temporary paths
+    local_new_data = "/tmp/new_data.parquet"
+    local_history = "/tmp/history.parquet"
     local_output = "/tmp/output.parquet"
 
     try:
-        # 1. Initialize GCS Client
         storage_client = storage.Client()
 
-        # 2. Download Data
-        bucket = storage_client.bucket(SILVER_BUCKET)
-        blob = bucket.blob(input_filename)
+        # 1. Download data from Silver layer
+        silver_bucket = storage_client.bucket(SILVER_BUCKET)
+        new_blob = silver_bucket.blob(input_filename)
+        new_blob.download_to_filename(local_new_data)
+        print(f"📥 Downloaded New Data: {input_filename}")
 
-        if not blob.exists():
-            print(f"⚠️ File not found in {SILVER_BUCKET}. Skipping.")
-            return
+        # 2. Download history data
+        gold_bucket = storage_client.bucket(GOLD_BUCKET)
+        history_blob = gold_bucket.blob(STATE_FILENAME)
 
-        print(f"📥 Downloading gs://{SILVER_BUCKET}/{input_filename} to {local_input}.")
-        blob.download_to_filename(local_input)
+        has_history = False
+        if history_blob.exists():
+            print(f"📥 Downloading History: {STATE_FILENAME}")
+            history_blob.download_to_filename(local_history)
+            has_history = True
+        else:
+            print("⚠️ No history found. Starting fresh state.")
 
         # 3. Configure DuckDB
         con = duckdb.connect(database=":memory:")
         con.execute("PRAGMA memory_limit='800MB';")
-        con.execute("PRAGMA threads=1;")
 
-        # 4. Define Logic
+        # 4. Define Table Loading Logic
+        # If I have history, I will UNION them. If not, just use new data.
+        if has_history:
+            con.execute(f"""
+                CREATE TABLE raw_combined AS 
+                SELECT * FROM '{local_history}'
+                UNION ALL 
+                SELECT * FROM '{local_new_data}'
+            """)
+        else:
+            con.execute(f"CREATE TABLE raw_combined AS SELECT * FROM '{local_new_data}'")
+
+        # 5. The Financial Query
         analysis_time = datetime.now(timezone.utc).isoformat()
 
         query = f"""
-            WITH price_changes AS (
-                -- Step 1: Calculate Price Difference
+            WITH deduplicated_data AS (
+                -- Safety: Ensure no duplicate rows if we re-process a file
+                SELECT DISTINCT * FROM raw_combined
+            ),
+
+            price_changes AS (
                 SELECT 
                     *,
                     current_price - LAG(current_price) OVER (
                         PARTITION BY coin_id ORDER BY source_updated_at
                     ) as price_diff
-                FROM '{local_input}'
+                FROM deduplicated_data
             ),
 
             rolling_stats AS (
-                -- Step 2: Calculate SMA, Volatility, and RSI Components
                 SELECT 
                     *,
-                    -- 7-Day SMA
                     AVG(current_price) OVER (
                         PARTITION BY coin_id ORDER BY source_updated_at 
                         ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
                     ) as sma_7d,
 
-                    -- Volatility
-                    STDDEV(current_price) OVER (
-                        PARTITION BY coin_id ORDER BY source_updated_at 
-                        ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW
-                    ) as volatility_7d,
-                    
-                    -- RSI Components (Avg Gain vs Avg Loss)
                     AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (
                         PARTITION BY coin_id ORDER BY source_updated_at
                         ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW
@@ -147,12 +160,8 @@ def process_analysis(event, context):
             ),
 
             final_calculations AS (
-                -- Step 3: Compute final RSI value
                 SELECT
-                    coin_id, symbol, name, current_price, market_cap, ath, 
-                    sma_7d, volatility_7d, source_updated_at, ingested_file, processed_at,
-
-                    -- RSI Formula
+                    *,
                     CASE 
                         WHEN avg_loss = 0 THEN 100
                         ELSE 100 - (100 / (1 + (avg_gain / avg_loss)))
@@ -162,61 +171,69 @@ def process_analysis(event, context):
 
             SELECT 
                 coin_id, symbol, name, current_price, market_cap, ath, 
-                sma_7d, volatility_7d, rsi_14d,
+                sma_7d, rsi_14d,
 
-                -- Step 4: Generate Signal
+                -- Generate Signal
                 CASE 
                     WHEN current_price < sma_7d AND rsi_14d < 30 THEN 'BUY'
                     WHEN current_price > sma_7d AND rsi_14d > 70 THEN 'SELL'
                     ELSE 'WAIT'
                 END as signal,
 
-                source_updated_at,
-                ingested_file,
-                processed_at,
+                source_updated_at, ingested_file, processed_at,
                 '{analysis_time}' as analyzed_at
 
             FROM final_calculations
+            -- Optimization: Keep only the last 30 days of history to prevent unlimited growth
+            -- (Assuming roughly 144 records per day per coin, 30 days ~ 4500 rows/coin)
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY coin_id ORDER BY source_updated_at DESC) <= 500
             ORDER BY source_updated_at DESC, coin_id
         """
 
         print("⚙️ Executing DuckDB Financial Models.")
 
-        # 5. Execute to Local Temp File
         con.execute(f"""
             COPY ({query})
             TO '{local_output}'
             (FORMAT 'PARQUET', COMPRESSION 'SNAPPY')
         """)
 
-        # Check for Alerts using Discord
-        # I query the temp file we just created to find the latest signal.
-        print("🔎 Checking for BUY signals.")
-        alert_query = f"SELECT symbol, current_price, rsi_14d, signal FROM '{local_output}' ORDER BY source_updated_at DESC LIMIT 1"
+        # 6. Check alerts
+        print("🔎 Checking for new BUY signals.")
+
+        # Get the timestamp of the new file I just ingested to verify freshness.
+        alert_query = """
+            SELECT symbol, current_price, rsi_14d, signal 
+            FROM raw_combined 
+            ORDER BY source_updated_at DESC 
+            LIMIT 1
+        """
         latest_row = con.execute(alert_query).fetchone()
 
         if latest_row:
             symbol, price, rsi, signal = latest_row
-            print(f"Info: Latest Signal for {symbol} is {signal}")
+            print(f"Info: Latest Signal for {symbol} is {signal} (RSI: {rsi})")
 
-            # Trigger alert ONLY if it's a BUY
+            # Logic: Alert if BUY
             if signal == "BUY":
                 send_discord_alert(symbol, price, rsi, signal)
 
-        # 6. Upload Result
-        print(f"📤 Uploading results to {GOLD_BUCKET}.")
-        out_bucket = storage_client.bucket(GOLD_BUCKET)
-        out_blob = out_bucket.blob("analyzed_market_summary.parquet")
+        # 7. Save State
+        print(f"📤 Updating Gold State: {STATE_FILENAME}")
+        out_blob = gold_bucket.blob(STATE_FILENAME)
         out_blob.upload_from_filename(local_output)
 
-        print("✅ Gold Layer Success. Pipeline Complete.")
+        print("✅ Gold Layer Success. State Updated.")
 
         # Cleanup
-        if os.path.exists(local_input): os.remove(local_input)
+        if os.path.exists(local_new_data): os.remove(local_new_data)
+        if os.path.exists(local_history): os.remove(local_history)
         if os.path.exists(local_output): os.remove(local_output)
 
         return "Success"
 
     except Exception as error:
         print(f"❌ Critical Error in Gold Cloud Function: {error}")
+        # Cleanup
+        if os.path.exists(local_new_data): os.remove(local_new_data)
         raise error
