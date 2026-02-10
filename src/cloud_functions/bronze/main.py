@@ -14,7 +14,12 @@ BRONZE_BUCKET_NAME = os.environ.get("BRONZE_BUCKET_NAME")
 # --- CONSTANTS ---
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
 BATCH_SIZE = 50
-RATE_LIMIT_SECONDS = 10
+
+# To mimic a browser
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "application/json"
+}
 
 # Default to a safe list if env is missing.
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
@@ -47,16 +52,36 @@ def fetch_market_data_batch(coin_ids: list) -> list:
         "locale": "en"
     }
 
-    # Added a slight timeout increase for cloud stability.
-    response = requests.get(COINGECKO_API_URL, params=params, timeout=15)
+    # Retry logic
+    max_retries = 3
 
-    if response.status_code == 429:
-        # Cloud: Return an empty list to avoid triggering an automatic Cloud Retry loop.
-        print("🚨 Rate limit hit (429). Skipping batch to avoid retry loop.")
-        return []
+    for attempt in range(max_retries):
+        try:
+            # I add headers=HEADERS here
+            response = requests.get(COINGECKO_API_URL, params=params, headers=HEADERS, timeout=30)
 
-    response.raise_for_status()
-    return response.json()
+            # Case A: Success
+            if response.status_code == 200:
+                return response.json()
+
+            # Case B: Rate Limit (429) -> Wait and Retry
+            if response.status_code == 429:
+                wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                print(f"   ⚠️ Rate limit (429). Sleeping {wait_time}s before retry {attempt+1}/{max_retries}...")
+                time.sleep(wait_time)
+                continue # Try again
+
+            # Case C: Other Errors (404, 500) -> Give up
+            print(f"   ❌ API Error: {response.status_code}")
+            return []
+
+        except requests.exceptions.RequestException as error:
+            print(f"   ❌ Network Error: {error}")
+            return []
+
+    # If I exit the loop, I failed all retries
+    print("   🚨 Max retries exceeded for this batch.")
+    return []
 
 @functions_framework.http
 def process_ingestion(request) -> Tuple[str, int]:
@@ -106,7 +131,6 @@ def process_ingestion(request) -> Tuple[str, int]:
 
     # Calculate batches
     total_batches = math.ceil(total_coins / BATCH_SIZE)
-
     print(f"📋 Targets: {total_coins} Coins | Batches: {total_batches}")
 
     all_market_data = []
@@ -118,22 +142,18 @@ def process_ingestion(request) -> Tuple[str, int]:
 
         print(f"🔄 Processing Batch {batch_num}/{total_batches} ({len(current_batch_ids)} coins).")
 
-        try:
-            batch_data = fetch_market_data_batch(current_batch_ids)
+        # Call the new robust fetcher
+        batch_data = fetch_market_data_batch(current_batch_ids)
 
-            if batch_data:
-                all_market_data.extend(batch_data)
-                print(f"   ✅ Success: {len(batch_data)} records.")
-            else:
-                print(f"   ⚠️ Warning: Batch {batch_num} empty (Rate Limit?).")
+        if batch_data:
+            all_market_data.extend(batch_data)
+            print(f"   ✅ Success: {len(batch_data)} records.")
+        else:
+            print(f"   ⚠️ Warning: Batch {batch_num} returned no data.")
 
-            if batch_num < total_batches:
-                print(f"   😴 Sleeping {RATE_LIMIT_SECONDS}s.")
-                time.sleep(RATE_LIMIT_SECONDS)
-
-        except Exception as error:
-            print(f"❌ Error on Batch {batch_num}: {error}")
-            return f"Error: {error}", 500
+        # Small buffer between batches to be nice to the API
+        if batch_num < total_batches:
+            time.sleep(2) 
 
     # 4. Lineage Injection
     print("💉 Injecting lineage timestamps.")
@@ -142,6 +162,7 @@ def process_ingestion(request) -> Tuple[str, int]:
 
     # 5. Save to GCS
     if not all_market_data:
+        print("❌ No data collected after all attempts.")
         return "Warning: No data collected.", 200
 
     try:
