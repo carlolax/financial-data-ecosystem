@@ -12,7 +12,7 @@ resource "random_id" "bucket_suffix" {
 
 # 1. SYSTEM BUCKET: Function Source Code
 # ------------------------------------------------
-# This bucket acts as a staging area. Terraform zips your Python code 
+# This bucket acts as a staging area. Terraform zips my Python code 
 # and uploads it here before deploying it to Google Cloud Functions.
 resource "google_storage_bucket" "function_source" {
   name     = "cdp-function-source-${random_id.bucket_suffix.hex}"
@@ -93,6 +93,7 @@ resource "google_storage_bucket" "gold_layer" {
   force_destroy = true
 
   uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
 
   lifecycle_rule {
     condition {
