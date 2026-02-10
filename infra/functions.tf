@@ -35,8 +35,8 @@ resource "google_cloudfunctions2_function" "bronze_ingest_function" {
 
   # Build Settings: Where the code comes from
   build_config {
-    runtime     = "python310"
-    entry_point = "process_ingestion" # MUST match the function name in main.py
+    runtime     = "python311"
+    entry_point = "process_ingestion"
     source {
       storage_source {
         bucket = google_storage_bucket.function_source.name
@@ -73,7 +73,7 @@ output "bronze_function_uri" {
 # -------------------------------------------------------------------------
 
 # Step 1: Zip the Code
-# Terraform takes your Python code from 'src/cloud_functions/silver' 
+# Terraform takes my Python code from 'src/cloud_functions/silver' 
 # and packages it into a standard zip file.
 data "archive_file" "silver_layer_zip" {
   type        = "zip"
@@ -82,8 +82,8 @@ data "archive_file" "silver_layer_zip" {
 }
 
 # Step 2: Upload to Cloud Storage
-# The zip file is uploaded to your "Function Source" bucket.
-# The 'md5' hash ensures Terraform only uploads a new version if your code changes.
+# The zip file is uploaded to my "Function Source" bucket.
+# The 'md5' hash ensures Terraform only uploads a new version if my code changes.
 resource "google_storage_bucket_object" "silver_layer_zip_upload" {
   name   = "silver-cleaning-${data.archive_file.silver_layer_zip.output_md5}.zip"
   bucket = google_storage_bucket.function_source.name
@@ -95,7 +95,7 @@ resource "google_storage_bucket_object" "silver_layer_zip_upload" {
 resource "google_cloudfunctions_function" "silver_clean" {
   name        = "cdp-silver-clean-v2"
   description = "Event-driven: Clean Bronze JSON to Silver Parquet"
-  runtime     = "python310"
+  runtime     = "python311"
   region      = var.region
   project     = var.project_id
 
@@ -104,7 +104,7 @@ resource "google_cloudfunctions_function" "silver_clean" {
   source_archive_bucket = google_storage_bucket.function_source.name
   source_archive_object = google_storage_bucket_object.silver_layer_zip_upload.name
 
-  # CRITICAL UPDATE: Matches your Python function name
+  # MUST match the function name in src/cloud_functions/silver/main.py
   entry_point = "process_cleaning"
 
   # Identity: Uses the same "Runner" service account as Bronze
@@ -150,11 +150,11 @@ resource "google_storage_bucket_object" "gold_layer_zip_upload" {
 resource "google_cloudfunctions_function" "gold_analysis" {
   name        = "cdp-gold-analytics-v2"
   description = "Event-driven: Calculate SMA & Signals from Silver Data"
-  runtime     = "python310"
+  runtime     = "python311"
   region      = var.region
   project     = var.project_id
 
-  available_memory_mb   = 512
+  available_memory_mb   = 1024
   source_archive_bucket = google_storage_bucket.function_source.name
   source_archive_object = google_storage_bucket_object.gold_layer_zip_upload.name
 
