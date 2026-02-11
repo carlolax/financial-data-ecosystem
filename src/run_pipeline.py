@@ -6,49 +6,61 @@ import google.auth.transport.requests
 import google.oauth2.id_token
 import shutil
 import os
-from dotenv import load_dotenv
+from pathlib import Path
+from dotenv import load_dotenv, find_dotenv
 
 # --- SETUP ---
-load_dotenv()
+# 1. Automatically find the .env file (walks up directories)
+env_path = find_dotenv()
+
+if env_path:
+    print(f"✅ Configuration loaded from: {env_path}")
+    load_dotenv(env_path)
+else:
+    print("❌ CRITICAL ERROR: .env file NOT FOUND.")
+    print("   Please ensure you have created a file named '.env' in the project root.")
 
 # --- CONFIGURATION ---
+BASE_DIR = Path(__file__).resolve().parent.parent
 FUNCTION_URL = os.getenv("BRONZE_FUNCTION_URL")
 GOLD_BUCKET_NAME = os.getenv("GOLD_BUCKET_NAME", "Unknown Bucket")
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
 
 # --- LOCAL MODULES IMPORT ---
+# This ensures I can import 'src.pipeline' regardless of how the script is run
+sys.path.append(str(BASE_DIR))
+
 try:
-    from pipeline.bronze.ingest import process_ingestion
-    from pipeline.silver.clean import process_cleaning
-    from pipeline.gold.analyze import process_analysis
-except ImportError:
-    # Fallback: If running from root without src on path, try appending it manually
-    # This makes the script robust regardless of how you run it.
-    sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+    from src.pipeline.bronze import ingest
+    from src.pipeline.silver import clean
+    from src.pipeline.gold import analyze
+except ImportError as error:
+    print(f"\n❌ IMPORT ERROR: {error}")
+    print("   Attempting fallback import.")
     try:
-        from pipeline.bronze.ingest import process_ingestion
-        from pipeline.silver.clean import process_cleaning
-        from pipeline.gold.analyze import process_analysis
+        # Fallback for when running directly inside src/
+        from pipeline.bronze import ingest
+        from pipeline.silver import clean
+        from pipeline.gold import analyze
     except ImportError as error:
-        print(f"\n❌ CRITICAL ERROR: Could not import local pipeline modules.")
+        print(f"   ❌ CRITICAL: Could not import pipeline modules.")
         print(f"   Details: {error}")
-        print("   Make sure you are running this script from the project root.\n")
         sys.exit(1)
 
 # ==========================================
 # ☁️ CLOUD LOGIC
 # ==========================================
-def get_gcloud_token():
+def get_gcloud_token() -> str | None:
     """
-    Fallback Authentication: Uses the installed 'gcloud' CLI to generate a token.
+    Retrieves an OIDC identity token using the installed gcloud CLI.
 
-    Why this is needed:
-    The standard Python Auth library often restricts User Credentials (like local 
-    'gcloud auth login' sessions) from generating OIDC Identity Tokens directly. 
-    The CLI tool allows developers to bypass this restriction for local testing.
+    This function is a fallback mechanism for local development. When the standard
+    Python Google Auth library fails (common in local environments without 
+    Service Account keys), this function invokes the 'gcloud auth print-identity-token' 
+    shell command to generate a valid credential.
 
     Returns:
-        str: A valid OIDC Identity Token.
+        str: A valid OIDC Identity Token if successful.
         None: If the gcloud tool is not installed or the command fails.
     """
     if not shutil.which("gcloud"):
@@ -62,21 +74,20 @@ def get_gcloud_token():
         print(f"❌ gcloud Auth Failed: {error}")
         return None
 
-def get_id_token(url):
+def get_id_token(url: str) -> str | None:
     """
-    Generates a Google OIDC token using a Hybrid Strategy.
+    Generates a Google OIDC token suitable for invoking Cloud Functions.
 
-    Strategy:
-    1. Try the official 'google-auth' library first.
-       - Best for Production environments (Cloud Run, Compute Engine, etc).
-    2. Fallback to 'gcloud' CLI if the library fails.
-       - Best for Local Development (Laptop).
+    It implements a 'Hybrid Strategy' for authentication:
+    1. Primary: Attempts to use the official 'google-auth' library (Best for CI/CD).
+    2. Fallback: Switches to the 'gcloud' CLI if the library fails (Best for Local Dev).
 
     Args:
-        url (str): The target URL (Audience) the token is intended for.
+        url (str): The target Audience URL (the Cloud Function endpoint) the token is intended for.
 
     Returns:
-        str: A valid Bearer token for the Authorization header.
+        str: A valid Bearer token for the HTTP Authorization header.
+        None: If authentication fails via all available methods.
     """
     try:
         auth_req = google.auth.transport.requests.Request()
@@ -88,15 +99,19 @@ def get_id_token(url):
 
 def run_cloud_pipeline():
     """
-    Triggers the remote Cloud Data Pipeline via HTTP.
+    Triggers the remote Cloud Data Pipeline via an authenticated HTTP request.
 
-    This function acts as the 'Remote Control'. It does not process data locally;
-    instead, it sends an authenticated signal to the Cloud Bronze Layer to start
-    the Event-Driven workflow (Bronze -> Silver -> Gold).
+    This function acts as a remote control. It does not execute data processing logic locally.
+    Instead, it:
+    1. Authenticates the user via Google Cloud IAM.
+    2. Sends a POST request to the deployed Bronze Layer Cloud Function.
+    3. Prints the response status (Success/Failure) to the console.
+
+    Usage:
+        Run this when you want to test the *actual* deployed infrastructure on GCP.
     """
     if not FUNCTION_URL:
         print("❌ Error: 'BRONZE_FUNCTION_URL' not found in .env file.")
-        print("   Please create a .env file based on .env.example")
         return
 
     print(f"\n☁️  STARTING CLOUD PIPELINE.")
@@ -109,9 +124,6 @@ def run_cloud_pipeline():
         print("❌ Critical Auth Failure: Could not generate OIDC token.")
         return
 
-    if DEBUG_MODE:
-        print(f"🐞 DEBUG: Token generated (Length: {len(token)})")
-
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
@@ -119,9 +131,7 @@ def run_cloud_pipeline():
         response = requests.post(FUNCTION_URL, headers=headers, json={})
 
         if response.status_code == 200:
-            print("✅ SUCCESS. Cloud Pipeline Triggered.")
-            if DEBUG_MODE:
-                print(f"🐞 DEBUG Response: {response.text}")
+            print("✅ SUCCESS: Cloud Pipeline Triggered.")
         else:
             print(f"❌ FAILED. Status: {response.status_code}")
             print(f"   Details: {response.text}")
@@ -136,38 +146,29 @@ def run_local_pipeline():
     """
     Executes the entire Data Pipeline logic locally on the host machine.
 
-    This bypasses the cloud infrastructure and runs the Python logic directly
-    using the local CPU and File System. 
+    This function runs the Python logic directly using the local CPU and File System,
+    bypassing Google Cloud entirely. It is useful for debugging logic changes,
+    testing new features, or running historical backfills.
 
     Workflow:
-    1. Bronze: Calls CoinGecko API -> Saves JSON to local 'data/bronze/'
-    2. Silver: Reads JSON -> Cleans with DuckDB -> Saves Parquet to 'data/silver/'
-    3. Gold: Reads Parquet -> Analyzes with DuckDB -> Saves Report to 'data/gold/'
+    1. Bronze Layer (Ingest): Fetches data from CoinGecko and saves JSON to 'data/bronze/'.
+    2. Silver Layer (Clean): Scans 'data/bronze/', cleans data via DuckDB, saves Parquet to 'data/silver/'.
+    3. Gold Layer (Analyze): Scans 'data/silver/', runs financial models, saves Parquet to 'data/gold/'.
     """
     print(f"\n💻 STARTING LOCAL PIPELINE.")
-    print(f"📂 Storage Target: Local Disk + {GOLD_BUCKET_NAME} (Reference)")
 
     try:
         # Step 1: Bronze Layer - Ingestion
-        print("   [1/3] Running Bronze (Ingest).")
-        raw_file = process_ingestion()
-
-        # Check if process_ingestion returned a file or just a path string
-        # (Handling both cases for robustness)
-        filename = getattr(raw_file, 'name', str(raw_file))
-        print(f"   ✅ Bronze Complete. File: {filename}")
+        print("\n👇 [1/3] BRONZE LAYER (Ingestion)")
+        ingest.process_ingestion()
 
         # Step 2: Silver Layer - Cleaning
-        print("   [2/3] Running Silver (Clean).")
-        clean_file = process_cleaning()
-        filename = getattr(clean_file, 'name', str(clean_file))
-        print(f"   ✅ Silver Complete. File: {filename}")
+        print("\n👇 [2/3] SILVER LAYER (Cleaning)")
+        clean.process_cleaning()
 
         # Step 3: Gold Layer - Analysis
-        print("   [3/3] Running Gold (Analyze).")
-        final_report = process_analysis()
-        filename = getattr(final_report, 'name', str(final_report))
-        print(f"   ✅ Gold Complete. Report: {filename}")
+        print("\n👇 [3/3] GOLD LAYER (Analysis)")
+        analyze.process_analysis()
 
         print("\n🎉 Local Pipeline Finished Successfully.")
 
@@ -184,9 +185,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Crypto Pipeline Controller")
     parser.add_argument(
         "--mode", 
-        choices=["local", "cloud", "all"], 
-        default="cloud",
-        help="Choose execution mode: 'local' (laptop), 'cloud' (GCP), or 'all' (both)."
+        choices=["local", "cloud"], 
+        default="local",
+        help="Choose execution mode: 'local' (laptop) or 'cloud' (GCP)."
     )
 
     args = parser.parse_args()
@@ -196,11 +197,9 @@ if __name__ == "__main__":
     print(f"🚀 CRYPTO PIPELINE CONTROLLER")
     print(f"   Mode:  {args.mode.upper()}")
     print(f"   Debug: {DEBUG_MODE}")
-    print(f"   Bucket: {GOLD_BUCKET_NAME}")
     print("="*40)
 
-    if args.mode in ["local", "all"]:
+    if args.mode == "local":
         run_local_pipeline()
-
-    if args.mode in ["cloud", "all"]:
+    elif args.mode == "cloud":
         run_cloud_pipeline()
