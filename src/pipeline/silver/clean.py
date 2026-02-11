@@ -63,7 +63,7 @@ def process_cleaning() -> Path:
                 current_price,
                 market_cap,
                 market_cap_rank,
-                
+
                 -- Safe FDV Calculation
                 CASE 
                     WHEN max_supply IS NULL THEN (current_price * total_supply)

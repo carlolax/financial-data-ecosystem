@@ -15,7 +15,12 @@ INGEST_DATA_DIR = BASE_DIR / "data" / "bronze"
 # --- CONSTANTS ---
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
 BATCH_SIZE = 50
-RATE_LIMIT_SECONDS = 10
+
+# Mimic a browser to avoid immediate 403/429 blocks.
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "application/json"
+}
 
 # Default to a safe list if env is missing.
 DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
@@ -25,16 +30,17 @@ def fetch_market_data_batch(coin_ids: list) -> list:
     """
     Fetches market data for a specific list of Coin IDs from CoinGecko.
 
-    Error Handling Strategy: "Fail Fast"
-    ------------------------------------
-    In the local environment, I raise an Exception immediately upon hitting
-    a Rate Limit (429).
+    STRATEGY: "Robust Retry" (Parity with Cloud Function)
+    -----------------------------------------------------
+    Previously "Fail Fast", this function now implements Exponential Backoff 
+    to handle transient Rate Limits (429) or Network Jitters.
 
-    Why: 
-    1. Immediate Feedback: The developer is likely watching the terminal and 
-       needs to know if the 'RATE_LIMIT_SECONDS' setting is too low.
-    2. Data Integrity: Locally, I prefer 'All or Nothing'. If I can't 
-       get all batches, I stop to prevent saving a half-complete dataset.
+    Why Changed?
+    1. Stealth: Uses Browser-like User-Agent headers to avoid bot detection.
+    2. Resilience: Instead of crashing immediately on a 429 error, it waits 
+       (5s, 10s, 20s) and retries up to 3 times.
+    3. Integrity: If all retries fail, it raises an Exception to stop the 
+       local process, ensuring we don't save incomplete datasets.
     """
     params = {
         "vs_currency": "usd",
@@ -47,40 +53,61 @@ def fetch_market_data_batch(coin_ids: list) -> list:
         "locale": "en"
     }
 
-    response = requests.get(COINGECKO_API_URL, params=params, timeout=10)
+    # Exponential Backoff Retry Loop
+    max_retries = 3
 
-    if response.status_code == 429:
-        raise Exception("🚨 Rate limit hit (429). Stop and adjust RATE_LIMIT_SECONDS.")
+    for attempt in range(max_retries):
+        try:
+            # Added headers=HEADERS
+            response = requests.get(COINGECKO_API_URL, params=params, headers=HEADERS, timeout=30)
 
-    response.raise_for_status()
-    return response.json()
+            # Case A: Success
+            if response.status_code == 200:
+                return response.json()
+
+            # Case B: Rate Limit (429) -> Wait and Retry
+            if response.status_code == 429:
+                wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
+                print(f"   ⚠️ Rate limit (429). Sleeping {wait_time}s before retry {attempt+1}/{max_retries}...")
+                time.sleep(wait_time)
+                continue # Try again
+
+            # Case C: Other Errors (404, 500) -> Raise Exception (Fail Fast for critical errors)
+            response.raise_for_status()
+
+        except requests.exceptions.RequestException as error:
+            print(f"   ❌ Network Error (Attempt {attempt+1}): {error}")
+            if attempt == max_retries - 1:
+                raise error # Crash if we run out of retries
+            time.sleep(5) # Small wait before retry on network error
+
+    raise Exception(f"🚨 Failed to fetch batch after {max_retries} attempts.")
 
 def process_ingestion() -> Path:
     """
     Orchestrates the Bronze Layer ingestion process for the Local Environment.
 
-    Workflow:
-    1. Configuration: Reads target coins from the .env file (via TARGET_CRYPTO_COINS).
-    2. Batching: Splits the coin list into chunks (e.g., 50 coins) to respect API limits.
-    3. Fetching: Calls CoinGecko API for each batch.
-       - Logic: Fails Fast (raises Exception) if errors occur.
-       - Rate Limiting: Sleeps between batches to avoid 429 errors.
-    4. Lineage: Injects 'ingested_timestamp' into every record for data tracking.
+    WORKFLOW:
+    1. Configuration: Reads target coins from the .env file.
+    2. Batching: Splits the coin list into chunks to respect API limits.
+    3. Robust Fetching: Calls CoinGecko API with "Stealth" headers and Retry Logic.
+       - Behavior: Retries on 429 errors (up to 3 times) before giving up.
+       - Integrity: Raises Exception ONLY if all retries fail, preventing partial data writes.
+    4. Lineage: Injects 'ingested_timestamp' into every record.
     5. Storage: Saves the combined raw JSON to the local filesystem (data/bronze/).
 
     Returns:
         Path: The file path of the saved JSON file.
 
     Raises:
-        Exception: If any batch fails (Fail Fast strategy), the entire process stops
-        to prevent partial data writes.
+        Exception: If a batch fails after maximum retries, the entire process stops.
     """
     print(f"🚀 Starting Bronze Layer - Local Ingestion.")
 
     # 1. Setup Time and Config
     capture_time = datetime.now(timezone.utc)
     file_timestamp = capture_time.strftime("%Y%m%d_%H%M%S")
-    
+
     coin_list = [c.strip() for c in TARGET_CRYPTO_COINS.split(",")]
     total_coins = len(coin_list)
     total_batches = math.ceil(total_coins / BATCH_SIZE)
@@ -100,17 +127,20 @@ def process_ingestion() -> Path:
 
         try:
             batch_data = fetch_market_data_batch(current_batch_ids)
-            all_market_data.extend(batch_data)
-            print(f"   ✅ Success: {len(batch_data)} records.")
 
-            # Rate Limit Sleep (skip for last batch)
+            if batch_data:
+                all_market_data.extend(batch_data)
+                print(f"   ✅ Success: {len(batch_data)} records.")
+            else:
+                print(f"   ⚠️ Warning: Batch {batch_num} returned empty data.")
+
+            # Small courtesy sleep between batches
             if batch_num < total_batches:
-                print(f"   😴 Sleeping {RATE_LIMIT_SECONDS}s.")
-                time.sleep(RATE_LIMIT_SECONDS)
+                time.sleep(2) 
 
         except Exception as error:
             print(f"❌ Critical Error on Batch {batch_num}: {error}")
-            raise error
+            raise error # This allows crash if the Retry Logic fails completely.
 
     # 4. Lineage Injection
     print("💉 Injecting lineage timestamps.")

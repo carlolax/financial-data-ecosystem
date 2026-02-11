@@ -1,3 +1,4 @@
+import functions_framework
 import duckdb
 import os
 import requests
@@ -5,9 +6,11 @@ from google.cloud import storage
 from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
-SILVER_BUCKET = os.environ.get("SILVER_BUCKET_NAME", "cdp-silver-clean-bucket")
-GOLD_BUCKET = os.environ.get("GOLD_BUCKET_NAME", "cdp-gold-analyze-bucket")
-DISCORD_URL = os.environ.get("DISCORD_WEBHOOK_URL") 
+SILVER_BUCKET_NAME = os.environ.get("SILVER_BUCKET_NAME")
+GOLD_BUCKET_NAME = os.environ.get("GOLD_BUCKET_NAME")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+
+# --- ANALYTICS CONSTANTS ---
 WINDOW_SIZE = 7
 RSI_PERIOD = 14
 STATE_FILENAME = "analyzed_market_summary.parquet"
@@ -31,7 +34,7 @@ def send_discord_alert(coin, price, rsi, signal):
         None: This function attempts to send a request but does not return a value. 
               Success or failure is logged to stdout.
     """
-    if not DISCORD_URL:
+    if not DISCORD_WEBHOOK_URL:
         print("⚠️ No Discord URL set. Skipping alert.")
         return
 
@@ -52,35 +55,45 @@ def send_discord_alert(coin, price, rsi, signal):
     }
 
     try:
-        requests.post(DISCORD_URL, json=payload, timeout=5)
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
         print(f"🔔 Alert sent to Discord for {coin}")
     except Exception as error:
         print(f"❌ Failed to send alert: {error}")
 
-def process_analysis(event, context):
+@functions_framework.cloud_event
+def process_analysis(cloud_event):
     """
-    Orchestrates the Gold Layer: Financial Analysis (Stable / Local Mode).
+    Orchestrates the Gold Layer: Financial Analysis & Signal Generation (Cloud Function).
 
-    Trigger:
+    TRIGGER:
         Event-Driven. Fires automatically when a file is finalized in the Silver Bucket.
 
-    Workflow:
-    1. Ingestion: Downloads the 'cleaned_market_data.parquet' from GCS to local disk (/tmp).
-       - Note: I use the native Google Cloud Storage client instead of DuckDB's 'httpfs' 
-         extension to avoid C++ threading/memory conflicts in the Cloud Function environment.
-    2. Configuration: 
-       - Limits DuckDB memory to 800MB (leaving room for Python overhead).
-       - Restricts execution to 1 thread to prevent concurrency crashes.
-    3. Transformation: 
-       - Calculates 7-Day SMA and Volatility using Window Functions.
-       - Generates BUY/SELL/WAIT signals based on Mean Reversion strategy.
-    4. Storage: Writes results to a local file, then uploads to the Gold Bucket.
+    WORKFLOW:
+    1. Ingestion: 
+       - Downloads the new 'cleaned_market_data.parquet' (Rich Schema) from Silver.
+       - Downloads the existing 'analyzed_market_summary.parquet' (History) from Gold.
+    2. State Management: 
+       - Merges New Data + Historical Data into a single DuckDB table.
+       - Preserves critical metrics (FDV, Volume, Supply, Rank) for deep analytics.
+    3. Financial Modeling:
+       - Calculates 7-Day Simple Moving Average (SMA).
+       - Calculates 14-Day Relative Strength Index (RSI).
+       - Generates Signals: BUY (Oversold), SELL (Overbought), WAIT.
+    4. Alerting: 
+       - Sends real-time Discord notifications for active BUY/SELL signals.
+    5. Storage: 
+       - Updates the 'analyzed_market_summary.parquet' state file in the Gold Bucket.
+       - Prunes history to keep the dataset lightweight (last 500 records per coin).
+
+    Args:
+        cloud_event: The CloudEvent object containing the GCS file metadata.
     """
-    input_filename = event['name']
-    print(f"🚀 Event {context.event_id} triggered. Processing update: {input_filename}")
+    data = cloud_event.data
+    input_filename = data['name']
+    print(f"🚀 Event {cloud_event['id']} triggered. Processing update: {input_filename}")
 
     # Setup temporary paths
-    local_new_data = "/tmp/new_data.parquet"
+    local_new_data = f"/tmp/{input_filename}"
     local_history = "/tmp/history.parquet"
     local_output = "/tmp/output.parquet"
 
@@ -88,11 +101,11 @@ def process_analysis(event, context):
         storage_client = storage.Client()
 
         # 1. Download data from Silver layer
-        silver_bucket = storage_client.bucket(SILVER_BUCKET)
+        silver_bucket = storage_client.bucket(SILVER_BUCKET_NAME)
         silver_bucket.blob(input_filename).download_to_filename(local_new_data)
 
         # 2. Download history data
-        gold_bucket = storage_client.bucket(GOLD_BUCKET)
+        gold_bucket = storage_client.bucket(GOLD_BUCKET_NAME)
         history_blob = gold_bucket.blob(STATE_FILENAME)
 
         has_history = False
@@ -108,15 +121,19 @@ def process_analysis(event, context):
         con.execute("PRAGMA memory_limit='800MB';")
 
         # 4. Define Table Loading Logic
-        # I explicitly select ONLY the raw columns that exist in both files.
-        # This prevents the "Binder Error" (Schema Mismatch).
+        # I added FDV, Volume, Supply, Rank, Changes to match Silver Schema
         common_columns = """
-            coin_id, symbol, name, current_price, market_cap, ath, 
+            coin_id, symbol, name, current_price, market_cap, market_cap_rank,
+            fully_diluted_valuation, total_volume, 
+            high_24h, low_24h, price_change_percentage_24h,
+            circulating_supply, total_supply, max_supply,
+            ath, ath_change_percentage, ath_date,
             source_updated_at, ingested_file, processed_at
         """
 
-        # If I have history, I will UNION them. If not, just use new data.
+        # Union Logic (State + New Data)
         if has_history:
+            # I use distinct to prevent duplicates if the function runs twice
             con.execute(f"""
                 CREATE TABLE raw_combined AS 
                 SELECT {common_columns} FROM '{local_history}'
@@ -140,7 +157,10 @@ def process_analysis(event, context):
             ),
             rolling_stats AS (
                 SELECT *,
+                    -- 7-Day SMA
                     AVG(current_price) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {WINDOW_SIZE - 1} PRECEDING AND CURRENT ROW) as sma_7d,
+
+                    -- RSI Components
                     AVG(CASE WHEN price_diff > 0 THEN price_diff ELSE 0 END) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW) as avg_gain,
                     AVG(CASE WHEN price_diff < 0 THEN ABS(price_diff) ELSE 0 END) OVER (PARTITION BY coin_id ORDER BY source_updated_at ROWS BETWEEN {RSI_PERIOD - 1} PRECEDING AND CURRENT ROW) as avg_loss
                 FROM price_changes
@@ -150,17 +170,28 @@ def process_analysis(event, context):
                     CASE WHEN avg_loss = 0 THEN 100 ELSE 100 - (100 / (1 + (avg_gain / avg_loss))) END as rsi_14d
                 FROM rolling_stats
             )
+
             SELECT 
-                coin_id, symbol, name, current_price, market_cap, ath, 
+                -- Passing through all rich metrics
+                coin_id, symbol, name, current_price, market_cap, market_cap_rank,
+                fully_diluted_valuation, total_volume,
+                high_24h, low_24h, price_change_percentage_24h,
+                circulating_supply, total_supply, max_supply,
+                ath, ath_change_percentage, ath_date,
+
+                -- Calculated Signals
                 sma_7d, rsi_14d,
                 CASE 
                     WHEN current_price < sma_7d AND rsi_14d < 30 THEN 'BUY'
                     WHEN current_price > sma_7d AND rsi_14d > 70 THEN 'SELL'
                     ELSE 'WAIT'
                 END as signal,
+
                 source_updated_at, ingested_file, processed_at,
                 '{analysis_time}' as analyzed_at
+
             FROM final_calculations
+            -- Keep only the last 500 records per coin to prevent file explosion
             QUALIFY ROW_NUMBER() OVER (PARTITION BY coin_id ORDER BY source_updated_at DESC) <= 500
             ORDER BY source_updated_at DESC, coin_id
         """
@@ -170,7 +201,8 @@ def process_analysis(event, context):
         # 6. Check alerts
         latest_row = con.execute(f"SELECT symbol, current_price, rsi_14d, signal FROM '{local_output}' ORDER BY source_updated_at DESC LIMIT 1").fetchone()
 
-        if latest_row and latest_row[3] == "BUY":
+        if latest_row and latest_row[3] != "WAIT":
+            # Only alert on BUY or SELL, not WAIT
             send_discord_alert(latest_row[0], latest_row[1], latest_row[2], latest_row[3])
 
         # 7. Save State
@@ -187,4 +219,5 @@ def process_analysis(event, context):
         print(f"❌ Critical Error in Gold Cloud Function: {error}")
         # Cleanup
         if os.path.exists(local_new_data): os.remove(local_new_data)
+        if os.path.exists(local_history): os.remove(local_history)
         raise error
