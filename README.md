@@ -117,7 +117,7 @@ make test
 - Terraform installed.
 - Python 3.12+ installed.
 
-**Environment Config**: Create a `.env` file in the root directory:
+**Config**: Create a `.env` file in the root directory:
 ```bash
 # --- Google Cloud Configuration ---
 # The URL of your deployed Bronze Cloud Function
@@ -146,6 +146,15 @@ Navigate to `infra/` and apply the Terraform configuration to provision Buckets,
 ```bash
 make deploy
 ```
+
+3. **Visualizing Data (Hybrid Dashboard)**
+
+Launch the **Strategy Command Center** to visualize market trends, RSI momentum, and correlation heatmaps.
+```bash
+streamlit run src/dashboard.py
+```
+- **Local Mode**: Reads data from your local `data/gold/` folder (fastest for dev).
+- **Cloud Mode**: Connects directly to your GCS Bucket to view live production data.
 
 ## 🛡 Security
 - **Stealth Mode**: All ingestion scripts use browser-mimicking headers.
