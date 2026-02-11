@@ -9,11 +9,14 @@ dependencies:
   - pyarrow
   
   - pip:
+    - fastparquet
     - gcsfs
     - google-cloud-storage
     - pandas
+    - plotly
     - pytest
     - pytest-mock
     - python-dotenv
     - requests
+    - streamlit
     - urllib3
