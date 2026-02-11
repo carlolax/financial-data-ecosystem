@@ -1,59 +1,56 @@
-# ☁️ Crypto Data Platform (GCP + Python + Terraform)
+# ☁️ Crypto Data Platform
 
 ![Build Status](https://github.com/carlolax/crypto-data-platform/actions/workflows/deploy.yaml/badge.svg)
 
-A serverless, event-driven data engineering platform that ingests, processes, and analyzes cryptocurrency market data. This project uses **Infrastructure as Code (IaC)** to deploy a scalable, self-healing architecture on Google Cloud Platform and includes a **Hybrid Strategy Command Center** for visualization and real-time alerting.
+A serverless, event-driven financial data ecosystem that ingests, cleans, and analyzes high-frequency cryptocurrency market data. This project implements a strict **Medallion Architecture** with **Environment Parity**, ensuring that historical backfills (Local) and live data streams (Cloud) are mathematically identical.
 
 ## 🚀 Quick Start (Makefile)
 
-This project includes a `Makefile` for streamlined developer experience.
+This project includes a `Makefile` to streamline the developer experience.
 
 | Command | Description |
 | :--- | :--- |
 | `make setup` | Install all Python dependencies. |
-| `make local` | Run the full data pipeline locally (Ingest → Clean → Analyze). |
-| `make cloud` | Trigger the live pipeline on Google Cloud Platform. |
+| `make local` | Run the full pipeline locally (Ingest → Clean → Analyze) using `src/pipeline/`. |
+| `make cloud` | Trigger the live Cloud Functions on GCP using `src/cloud_functions/`. |
+| `make backfill`| Run the historical data fetcher ("Smash & Grab" strategy). |
 | `make test` | Run the Pytest suite to verify logic. |
+| `make deploy` | Deploy infrastructure via Terraform. |
 | `make clean` | Remove temporary cache files. |
 
 ## 🏗 Architecture & Design Decisions
 
-**Region:** `us-central1` (Iowa) - *Optimized for GCP Free Tier*
+The pipeline follows a **"Rich Schema"** philosophy, preserving critical financial metrics (FDV, Volume, Supply) from ingestion through to analytics to support deep-dive research.
 
-> 🧠 **Deep Dive:** Want to know why I chose Serverless over Kubernetes? Read my **[Infrastructure Architecture Decisions](docs/infrastructure_decisions.md)**.
+### 1. 🥉 Bronze Layer (Ingestion)
+* **Source:** CoinGecko API (`/coins/markets`).
+* **Strategy - Local:** **"Fail Fast"** with Exponential Backoff (Retries on 429). Uses "Stealth Mode" headers to prevent IP bans during heavy backfills.
+* **Strategy - Cloud:** **"Graceful Degradation"**. Returns empty lists on errors to prevent Cloud Scheduler retry storms.
+* **Storage:** Google Cloud Storage (Raw JSON).
 
-The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), where each stage automatically triggers the next.
+### 2. 🥈 Silver Layer (Cleaning & Deduplication)
+* **Engine:** DuckDB (In-Memory).
+* **Parity:** **100% SQL Logic Match** between Local and Cloud.
+* **Calculations:**
+    * **Safe FDV:** Calculates Fully Diluted Valuation, handling `NULL` Max Supply (e.g., ETH) correctly.
+    * **Normalization:** Casts timestamps to UTC and standardizes column types.
+* **Storage:** Snappy-compressed Parquet (`clean_prices_YYYYMMDD.parquet`).
 
-1.  **Ingestion (Bronze Layer):**
-    * **Source:** CoinGecko API (`/coins/markets` endpoint).
-    * **Features:** Smart Batching & Rate Limiting.
-    * **Storage:** Google Cloud Storage (Raw JSON).
-    * **Trigger:** Cloud Scheduler (Hourly).
-
-2.  **Processing (Silver Layer):**
-    * **Trigger:** Event-Driven (Fires immediately when data lands in Bronze).
-    * **Logic:** DuckDB (SQL-on-Serverless).
-    * **Features:** Historical Reconstruction & Schema Evolution.
-    * **Storage:** Google Cloud Storage (Parquet - Master History File).
-
-3.  **Analytics & Alerting (Gold Layer):**
-    * **Trigger:** Event-Driven (Fires after Silver Layer completion).
-    * **Logic:** DuckDB + Python Requests.
-    * **Features:** Financial Modeling (RSI, SMA, Volatility) & Discord Alerts.
-    * **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
-
-4.  **Visualization (The Command Center):**
-    * **Tool:** Streamlit (Python-based UI).
-    * **Mode:** Hybrid (Toggle between `LOCAL` disk data and `CLOUD` live bucket data).
-    * **Visuals:** Interactive Plotly charts, Momentum Oscillators, and Risk Heatmaps.
+### 3. 🥇 Gold Layer (Analytics & Alerting)
+* **Engine:** DuckDB Window Functions.
+* **Logic:** **State Management**. Merges new incoming data with the existing `analyzed_market_summary.parquet` to ensure Moving Averages and RSI are calculated over the full history, not just the current batch.
+* **Indicators:**
+    * **SMA_7:** 7-Day Simple Moving Average.
+    * **RSI_14:** 14-Day Relative Strength Index (Momentum).
+    * **Volatility:** Standard Deviation of price changes.
+* **Storage:** Google Cloud Storage (Parquet - Analytics Ready).
 
 ## 🛠 Tech Stack
 
-* **Language:** Python 3.10
+* **Language:** Python 3.12
 * **Infrastructure:** Terraform (IaC) - *Manages IAM, Storage, and Compute.*
-* **Data Processing:** Pandas (Ingest), DuckDB (OLAP Transformation)
-* **Cloud:** Google Cloud Platform (Cloud Functions V2, Storage, Scheduler, IAM)
-* **Visualization:** Streamlit, Plotly
+* **Data Processing:** DuckDB (OLAP Transformation)
+* **Cloud:** Google Cloud Platform (Cloud Functions Gen 2, Storage, Scheduler, IAM)
 * **Orchestration:** Eventarc (Triggers) & Custom Hybrid CLI (`run_pipeline.py`)
 
 ## 📂 Project Structure
@@ -62,45 +59,46 @@ The pipeline follows a "Medallion Architecture" (Bronze → Silver → Gold), wh
 .
 ├── CONTRIBUTING.md
 ├── LICENSE
-├── Makefile                # 🛠 Command Runner (Setup, Test, Deploy)
+├── Makefile
 ├── README.md
-├── docs/                   # 📚 Architecture & Design Documents
-│   └── infrastructure_decisions.md
-├── data/                   # Local data storage (for testing/hybrid mode)
+├── SECURITY.md
+├── data/                   # Local storage for hybrid/testing mode
 │   ├── bronze/             # Raw JSON files
-│   ├── gold/               # Final Aggregated Parquet files
+│   ├── gold/               # Final Analytics Parquet files
 │   └── silver/             # Cleaned Parquet files
+├── docs/
+│   └── infrastructure_decisions.md
 ├── infra/                  # Terraform Infrastructure Code
-│   ├── functions.tf        # Cloud Function definitions
-│   ├── iam.tf              # Service Accounts & Permissions
-│   ├── storage.tf          # GCS Bucket Definitions (w/ Random IDs)
-│   ├── scheduler.tf        # Cloud Scheduler (Cron Jobs)
-│   ├── provider.tf         # GCP Provider & Backend Config
-│   └── variables.tf        # Input variable declarations
+│   ├── budget.tf
+│   ├── functions.tf
+│   ├── iam.tf
+│   ├── provider.tf
+│   ├── scheduler.tf
+│   ├── storage.tf
+│   └── variables.tf
 ├── src/
 │   ├── cloud_functions/    # Production-ready Cloud Functions
-│   │   ├── bronze/         # Ingestion Logic (main.py)
-│   │   ├── gold/           # Analytics & Alerting Logic (main.py)
-│   │   └── silver/         # Transformation Logic (main.py)
-│   ├── dashboard.py        # Hybrid Streamlit Dashboard
-│   ├── pipeline/           # Local Data Pipeline Logic (Mirrors Cloud)
-│   │   ├── bronze/         # Local ingestion script
-│   │   ├── gold/           # Local analytics script
-│   │   └── silver/         # Local cleaning script
+│   │   ├── bronze/         # Ingestion (Smart Retries + Stealth)
+│   │   ├── silver/         # Cleaning (Rich Schema Preservation)
+│   │   └── gold/           # Analytics (Stateful Window Functions)
+│   ├── pipeline/           # Local Python Scripts (Historical Backfills)
+│   │   ├── bronze/         # ingest.py
+│   │   ├── silver/         # clean.py
+│   │   └── gold/           # analyze.py
+│   ├── scripts/            # Utility Scripts
+│   │   └── backfill.py     # "Smash & Grab" Historical Data Fetcher
+│   ├── dashboard.py        # Streamlit Dashboard (Hybrid Mode)
 │   ├── run_pipeline.py     # 🚀 Hybrid CLI Controller (Entry Point)
-│   └── scripts/
-│       └── backfill.py     # Utility to reload historical data
-└── tests/                  # Unit Test Suite
-    ├── __init__.py
+│   └── requirements.txt
+└── tests/                  # Pytest Suite
     └── pipeline/
-        ├── __init__.py
-        ├── test_bronze.py  # API Mocking & Rate Limit Tests
-        ├── test_gold.py    # Financial Math & Signal Logic Verification
-        └── test_silver.py  # DuckDB SQL Integration Tests
+        ├── test_bronze.py
+        ├── test_gold.py
+        └── test_silver.py
 ```
 
 ## 🧪 Testing & Quality Assurance
-This project uses **Pytest** to ensure reliability across all layers of the pipeline. The test suite covers API handling, SQL logic, and financial modeling without needing to hit live cloud resources.
+This project uses **Pytest** to ensure reliability across all layers.
 
 **Run the Suite**
 ```bash
@@ -108,69 +106,48 @@ make test
 ```
 
 **Strategy**
-1. **Bronze (Ingestion)**:
-    - **Mocking**: Uses `unittest.mock` to simulate CoinGecko API responses.
-    - **Safety**: Ensures no actual HTTP requests are made during testing to prevent rate-limiting or IP bans.
-    - **Logic**: Verifies "Fail Fast" behavior on 429 errors and correct batch processing.
-2. **Silver (Processing)**:
-    - **Integration**: Uses Pytest's `tmp_path` to create temporary, real JSON files.
-    - **Engine**: Runs actual DuckDB SQL queries against these temp files to verify column cleaning, deduplication, and schema evolution.
-3. **Gold (Analytics)**:
-    - **Verification**: Uses controlled Pandas DataFrames to simulate market patterns (e.g., "Bull Run" vs "Crash").
-    - **Math**: mathematically verifies that the **RSI**, **7-Day SMA**, and **Volatility** calculations trigger the correct `BUY` or `SELL` signals.
+1. **Bronze**: Mocks API responses to verify "Retry Logic" without hitting real endpoints.
+2. **Silver**: Uses `tmp_path` to verify DuckDB SQL transformation logic and Schema Parity.
+3. **Gold**: Mathematically verifies that **RSI** and **SMA** signals (`BUY`/`SELL`) trigger correctly on synthetic market data.
 
 ## 🚀 Deployment & Usage Guide
 1. **Setup**
 **Prerequisites**:
 - Google Cloud SDK (gcloud) installed and authenticated.
 - Terraform installed.
-- Python 3.10+ installed.
+- Python 3.12+ installed.
 
 **Environment Config**: Create a `.env` file in the root directory:
 ```bash
-BRONZE_FUNCTION_URL="[https://your-cloud-function-url-here.a.run.app](https://your-cloud-function-url-here.a.run.app)"
-GOLD_BUCKET_NAME="your-gold-bucket-name-[random-id]"
+# --- Google Cloud Configuration ---
+# The URL of your deployed Bronze Cloud Function
+BRONZE_FUNCTION_URL="https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/cdp-bronze-ingest"
+
+# The name of your Gold Bucket (used by Dashboard to download results)
+GOLD_BUCKET_NAME="cdp-gold-analyze-bucket-[id]"
+
+# --- Alerting Configuration ---
+# The Webhook URL for your Discord Server
 DISCORD_WEBHOOK_URL="[https://discord.com/api/webhooks/](https://discord.com/api/webhooks/)..."
+
+# --- Data Configuration ---
+# List of cryptocurrency tokens for collecting data
+CRYPTO_COINS="bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin"
+
+# --- Optional (For Local Development) ---
+# Toggle for debug mode (True/False)
+DEBUG_MODE="False"
 ```
 
 2. **Infrastructure (IaC)**
 
-**Automated (Recommended)** Simply commit your changes to the `main` branch. GitHub Actions will automatically provision and update the infrastructure.
+Navigate to `infra/` and apply the Terraform configuration to provision Buckets, Service Accounts, and Cloud Functions.
 
-**Manual (Dev/Debug)**
-
-1. Create a `terraform.tfvars` file in the `infra/` folder with your secrets (do not commit this file).
-2. Run:
 ```bash
-cd infra
-terraform init
-terraform apply
+make deploy
 ```
-
-*Note: Buckets now use random suffixes (e.g., `cdp-bronze-lake-a1b2c3`) to ensure global uniqueness.*
-
-3. **Pipeline Control Center (Hybrid CLI)**
-
-You can run the pipeline using the `Makefile` shortcuts:
-
-| Mode | Command | Description |
-|---|---|---|
-| **Local** | `make cloud` | Runs the logic locally on your laptop (saves to `/data`). |
-| **Cloud** | `make local` | Authenticates and triggers the live GCP pipeline. |
-
-4. **Visualization**
-
-To see the results in the Strategy Command Center:
-```bash
-# Launch the Dashboard
-streamlit run src/dashboard.py
-```
-
-*Note: Use the "**Data Source**" toggle in the sidebar to switch between `CLOUD` (Live) and `LOCAL` (Dev) modes instantly.*
 
 ## 🛡 Security
-- **Secret Management**: Discord Webhooks and sensitive keys are injected via Environment Variables and GitHub Secrets; they are never hardcoded.
-- **Service Account**: Uses a dedicated `crypto-runner-sa` with restricted permissions (`storage.admin`).
-- **Idempotency**: All functions are designed to run multiple times without corrupting data (Overwrite/Update logic).
-- **Schema Enforcement**: Strict typing in DuckDB prevents pipeline crashes from bad API data.
-- **Authentication**: Cloud Functions are private and require OIDC tokens; the `run_pipeline.py` script handles this securely via Google Auth libraries.
+- **Stealth Mode**: All ingestion scripts use browser-mimicking headers.
+- **Secret Management**: Discord Webhooks and sensitive keys are injected via Environment Variables; never hardcoded.
+- **Least Privilege**: Uses a dedicated `crypto-runner-sa` Service Account with restricted permissions.
