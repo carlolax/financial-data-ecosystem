@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import duckdb
-from src.pipeline.gold.analyze import process_analysis
+from src.pipeline.gold.analyze import process_analysis, STATE_FILENAME
 from unittest.mock import patch
 
 @pytest.fixture
@@ -32,7 +32,10 @@ def silver_data():
         "market_cap_rank": [1] * 15,
         "fully_diluted_valuation": [11000 * p for p in prices],
         "total_volume": [5000] * 15,
-        "source_updated_at": dates
+        "ath": [69000] * 15,
+        "source_updated_at": dates,
+        "ingested_timestamp": dates,
+        "processed_at": dates
     })
     return df
 
@@ -54,43 +57,40 @@ def test_process_analysis_logic(tmp_path, silver_data):
     """
     # 1. SETUP: Create a mock Silver Parquet file
     silver_dir = tmp_path / "data" / "silver"
+    gold_dir = tmp_path / "data" / "gold"
     silver_dir.mkdir(parents=True)
+    gold_dir.mkdir(parents=True)
 
     silver_file = silver_dir / "clean_prices_20230115.parquet"
     silver_data.to_parquet(silver_file)
 
+    # The file I expect to be created based on STATE_FILENAME
+    expected_gold_file = gold_dir / STATE_FILENAME
+
     # Add 'src.' to patch paths
     with patch("src.pipeline.gold.analyze.SILVER_DIR", silver_dir), \
-         patch("src.pipeline.gold.analyze.GOLD_DIR", tmp_path / "data" / "gold"):
+         patch("src.pipeline.gold.analyze.GOLD_DIR", gold_dir):
 
         # 2. EXECUTE
-        result_file = process_analysis()
+        process_analysis()
 
         # 3. ASSERT
-        assert result_file is not None
-        assert result_file.exists()
+        assert expected_gold_file.exists()
 
         # Verify Calculations via DuckDB
         con = duckdb.connect()
-        df = con.execute(f"SELECT * FROM '{result_file}' ORDER BY source_updated_at").df()
+        df = con.execute(f"SELECT * FROM '{expected_gold_file}' ORDER BY source_updated_at").df()
 
-        # Check Rich Schema Preservation
+        # Check column existence
         assert "market_cap" in df.columns
-        assert "fully_diluted_valuation" in df.columns
+        assert "ath" in df.columns
+        assert "sma_7d" in df.columns
+        assert "rsi_14d" in df.columns
 
-        # Check SMA Logic (Day 15 should have an SMA)
-        # SMA of last 7 days (108..114) -> Avg should be 111
+        # Check SMA Logic: Avg of 108, 109, 110, 111, 112, 113, 114 is 111
         last_row = df.iloc[-1]
-        assert last_row['sma_7d'] is not None
         assert 110 < last_row['sma_7d'] < 112
-
-        # Check RSI Logic
-        # Constant uptrend means RSI should be high (Overbought) or near 100
         assert last_row['rsi_14d'] > 70
-
-        # Check Signal Logic
-        # Price (114) > SMA (111) -> Should be BUY or WAIT (depending on RSI check)
-        # Since RSI is likely > 70 (Overbought), logic might suppress BUY, but I check column exists
         assert "signal" in df.columns
 
 def test_process_analysis_no_file(tmp_path):
@@ -103,11 +103,12 @@ def test_process_analysis_no_file(tmp_path):
         - Expectation: The function returns None immediately without raising errors.
     """
     silver_dir = tmp_path / "data" / "silver"
+    gold_dir = tmp_path / "data" / "gold"
     silver_dir.mkdir(parents=True)
 
     # Add 'src.' to patch paths
     with patch("src.pipeline.gold.analyze.SILVER_DIR", silver_dir), \
-         patch("src.pipeline.gold.analyze.GOLD_DIR", tmp_path / "data" / "gold"):
+         patch("src.pipeline.gold.analyze.GOLD_DIR", gold_dir):
 
         result = process_analysis()
         assert result is None

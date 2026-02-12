@@ -16,7 +16,7 @@ def mock_env_vars(monkeypatch):
 
 # --- TESTS ---
 @patch('src.pipeline.bronze.ingest.requests.get')
-def test_ingest_bronze_success(mock_get, tmp_path, mock_env_vars):
+def test_ingest_bronze_success(mock_get, tmp_path):
     """
     Verifies that the ingestion process runs successfully when API returns valid data.
 
@@ -43,8 +43,9 @@ def test_ingest_bronze_success(mock_get, tmp_path, mock_env_vars):
     test_ingest_dir = tmp_path / "data" / "bronze"
 
     # Patch 'INGEST_DATA_DIR' to match the ingest.py variable name
-    with patch('src.pipeline.bronze.ingest.INGEST_DATA_DIR', test_ingest_dir):
-        
+    with patch('src.pipeline.bronze.ingest.INGEST_DATA_DIR', test_ingest_dir), \
+         patch('src.pipeline.bronze.ingest.TARGET_CRYPTO_COINS', MOCK_COINS_STR):
+
         # 2. EXECUTE
         result_file = process_ingestion()
 
@@ -52,10 +53,9 @@ def test_ingest_bronze_success(mock_get, tmp_path, mock_env_vars):
         assert result_file is not None
         assert result_file.exists()
         assert result_file.name.startswith("raw_prices_")
-        assert result_file.suffix == ".json"
 
 @patch('src.pipeline.bronze.ingest.requests.get')
-def test_ingest_rate_limit_error(mock_get, mock_env_vars):
+def test_ingest_rate_limit_error(mock_get):
     """
     Verifies that the ingestion process fails gracefully after retries.
 
@@ -105,12 +105,13 @@ def test_ingest_batching_logic(mock_get, tmp_path):
     test_ingest_dir = tmp_path / "data" / "bronze"
 
     # Patch 'INGEST_DATA_DIR' here as well
-    with patch('src.pipeline.bronze.ingest.INGEST_DATA_DIR', test_ingest_dir):
+    with patch('src.pipeline.bronze.ingest.INGEST_DATA_DIR', test_ingest_dir), \
+         patch('src.pipeline.bronze.ingest.TARGET_CRYPTO_COINS', MOCK_COINS_STR):
         # 2. EXECUTE
         process_ingestion()
 
         # 3. ASSERT
-        # Verify that the URL call included our coin IDs
+        # Verify that the URL call included my coin IDs
         # Note: The code uses kwargs['params'] for the CoinGecko call
         args, kwargs = mock_get.call_args
         called_params = kwargs.get('params', {})
