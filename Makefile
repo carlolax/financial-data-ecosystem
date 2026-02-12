@@ -26,7 +26,7 @@ setup:
 
 # 🧪 Test: Run all unit tests
 test:
-	pytest tests/
+	PYTHONPATH=. pytest tests/ -v
 
 # 🏠 Local: Run pipeline locally
 local:
