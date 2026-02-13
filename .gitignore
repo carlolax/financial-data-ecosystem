@@ -3,6 +3,7 @@ infra/gcp-key.json
 infra/terraform.tfvars
 .env
 *.pem
+scripts/crawler_progress.json
 
 # --- Python ---
 __pycache__/
@@ -28,3 +29,4 @@ Thumbs.db
 data/
 *.parquet
 *.json
+*.csv
