@@ -1,161 +1,199 @@
-import os
+import argparse
 import requests
+import os
+import websocket
 import json
 import time
-import math
-from datetime import datetime, timezone
-from dotenv import load_dotenv
+import zipfile  # Only needed to verify zip integrity, not to extract
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# --- SETUP ---
-load_dotenv()
+# --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
-INGEST_DATA_DIR = BASE_DIR / "data" / "bronze"
+BRONZE_DIR = BASE_DIR / "data" / "bronze"
 
-# --- CONSTANTS ---
-COINGECKO_API_URL = "https://api.coingecko.com/api/v3/coins/markets"
-BATCH_SIZE = 50
+# URLS
+BINANCE_MONTHLY_URL = "https://data.binance.vision/data/spot/monthly/klines"
+BINANCE_DAILY_URL = "https://data.binance.vision/data/spot/daily/klines"
+BINANCE_WS_URL = "wss://stream.binance.com:9443/ws"
 
-# Mimic a browser to avoid immediate 403/429 blocks.
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Accept": "application/json"
-}
+# MASTER COIN LIST
+PAIRS = [
+    # --- TIER 1: The Kings ---
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT",
+    # --- TIER 2: Utilities ---
+    "XRPUSDT", "ADAUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "LINKUSDT",
+    # --- TIER 3: Layer 2s ---
+    "ARBUSDT", "MATICUSDT", "OPUSDT",
+    # --- TIER 4: AI & Compute ---
+    "FETUSDT", "RENDERUSDT", "TAOUSDT", "NEARUSDT",
+    # --- TIER 5: Gaming ---
+    "IMXUSDT", "GALAUSDT", "AXSUSDT",
+    # --- TIER 6: Storage ---
+    "FILUSDT", "ARUSDT",
+    # --- TIER 7: DeFi & RWA ---
+    "UNIUSDT", "AAVEUSDT", "ONDOUSDT",
+    # --- TIER 8: New Gen ---
+    "SUIUSDT", "SEIUSDT", "TIAUSDT",
+    # --- TIER 9: Memes ---
+    "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "WIFUSDT"
+]
 
-# Default to a safe list if env is missing.
-DEFAULT_CRYPTO_COINS = "bitcoin,ethereum,solana,cardano,binancecoin,ripple,dogecoin,chainlink,uniswap,litecoin,polkadot,matic-network,stellar,vechain"
-TARGET_CRYPTO_COINS = os.getenv("CRYPTO_COINS", DEFAULT_CRYPTO_COINS)
+INTERVAL = "1m"
 
-def fetch_market_data_batch(coin_ids: list) -> list:
+def ingest_historical():
     """
-    Fetches market data for a specific list of Coin IDs from CoinGecko.
-
-    STRATEGY: "Robust Retry" (Parity with Cloud Function)
-    -----------------------------------------------------
-    Previously "Fail Fast", this function now implements Exponential Backoff 
-    to handle transient Rate Limits (429) or Network Jitters.
-
-    Why Changed?
-    1. Stealth: Uses Browser-like User-Agent headers to avoid bot detection.
-    2. Resilience: Instead of crashing immediately on a 429 error, it waits 
-       (5s, 10s, 20s) and retries up to 3 times.
-    3. Integrity: If all retries fail, it raises an Exception to stop the 
-       local process, ensuring we don't save incomplete datasets.
+    MODE 1: Downloads Monthly Zips (2017-2026)
+    Saves to: data/bronze/historical_monthly/{coin}/
     """
-    params = {
-        "vs_currency": "usd",
-        "ids": ",".join(coin_ids),
-        "order": "market_cap_desc",
-        "per_page": 250,
-        "page": 1,
-        "sparkline": "false",
-        "price_change_percentage": "1h,24h,7d",
-        "locale": "en"
-    }
+    print("🏛️ STARTING HISTORICAL INGESTION (Monthly Zips).")
+    dest_dir = BRONZE_DIR / "historical_monthly"
 
-    # Exponential Backoff Retry Loop
-    max_retries = 3
+    # Define range
+    years = ["2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"]
+    months = [f"{i:02d}" for i in range(1, 13)]
 
-    for attempt in range(max_retries):
+    for symbol in PAIRS:
+        coin_dir = dest_dir / symbol.replace("USDT", "").lower()
+        os.makedirs(coin_dir, exist_ok=True)
+
+        print(f"\nChecking {symbol}.")
+        for year in years:
+            for month in months:
+                # Binance started July 2017
+                if year == "2017" and int(month) < 8:
+                    continue
+
+                filename = f"{symbol}-{INTERVAL}-{year}-{month}.zip"
+                url = f"{BINANCE_MONTHLY_URL}/{symbol}/{INTERVAL}/{filename}"
+                save_path = coin_dir / filename
+
+                if save_path.exists():
+                    print(f"  ⏩ Skipping {year}-{month} (Exists)", end="\r")
+                    continue
+
+                try:
+                    print(f"  ⬇️ Downloading {year}-{month}.", end="\r")
+                    resp = requests.get(url)
+                    if resp.status_code == 200:
+                        with open(save_path, "wb") as f:
+                            f.write(resp.content)
+                    elif resp.status_code == 404:
+                        pass # Data not available yet
+                    else:
+                        print(f"\n  ❌ Failed {year}-{month}: {resp.status_code}")
+                except Exception as error:
+                    print(f"\n  ❌ Error {year}-{month}: {error}")
+
+def ingest_recent():
+    """
+    MODE 2: Downloads Daily Zips (Current Month Gap-Fill)
+    Saves to: data/bronze/recent_daily/{coin}/
+    """
+    print("\n📅 STARTING RECENT INGESTION (Daily Zips).")
+    dest_dir = BRONZE_DIR / "recent_daily"
+
+    # Calculate days: 1st of this month -> Yesterday
+    today = datetime.now(timezone.utc)
+    start_date = today.replace(day=1)
+    end_date = today - timedelta(days=1)
+
+    dates = []
+    curr = start_date
+    while curr <= end_date:
+        dates.append(curr)
+        curr += timedelta(days=1)
+
+    print(f"Targeting range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+
+    for symbol in PAIRS:
+        coin_dir = dest_dir / symbol.replace("USDT", "").lower()
+        os.makedirs(coin_dir, exist_ok=True)
+
+        print(f"\nChecking {symbol}.")
+        for d in dates:
+            date_str = d.strftime("%Y-%m-%d")
+            filename = f"{symbol}-{INTERVAL}-{date_str}.zip"
+            url = f"{BINANCE_DAILY_URL}/{symbol}/{INTERVAL}/{filename}"
+            save_path = coin_dir / filename
+
+            if save_path.exists():
+                continue
+
+            try:
+                print(f"  ⬇️ Fetching {date_str}...", end="\r")
+                resp = requests.get(url)
+                if resp.status_code == 200:
+                    with open(save_path, "wb") as f:
+                        f.write(resp.content)
+
+                    # --- VERIFICATION STEP ---
+                    if not zipfile.is_zipfile(save_path):
+                        print(f"\n  ❌ CORRUPT ZIP: {date_str} (Deleting to retry later)")
+                        os.remove(save_path)
+                    else:
+                        # Print a clean success message overwriting the "Fetching" line
+                        print(f"  ✅ Verified {date_str}   ", end="\r")
+
+                elif resp.status_code == 404:
+                    # Often happens if Binance hasn't uploaded yesterday's file yet
+                    print(f"  ⚠️ {date_str} not ready on server.", end="\r")
+            except Exception as error:
+                print(f"\n  ❌ Error {date_str}: {error}")
+
+def ingest_live():
+    """
+    MODE 3: Live WebSocket Stream
+    Saves to: data/bronze/live_buffer/stream_buffer.csv
+    """
+    print("\n📡 STARTING LIVE INGESTION (WebSocket).")
+    buffer_file = BRONZE_DIR / "live_buffer" / "stream_buffer.csv"
+    os.makedirs(buffer_file.parent, exist_ok=True)
+    
+    # Define WebSocket Logic locally since it's specific to this mode
+    def on_open(ws):
+        print("  🔌 Connected. Subscribing.")
+        params = [f"{coin.lower()}@kline_1m" for coin in PAIRS]
+        ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
+
+    def on_message(ws, message):
+        data = json.loads(message)
+        if 'k' in data and data['k']['x']: # 'x' means closed candle
+            k = data['k']
+            row = f"{k['s']},{k['t']},{k['o']},{k['h']},{k['l']},{k['c']},{k['v']}\n"
+
+            # Append raw CSV data immediately to catch it all
+            with open(buffer_file, "a") as f:
+                f.write(row)
+
+            print(f"  💾 Saved {k['s']} {k['c']}", end="\r")
+
+    def run_stream():
+        ws = websocket.WebSocketApp(BINANCE_WS_URL, on_open=on_open, on_message=on_message)
+        ws.run_forever()
+
+    while True:
         try:
-            # Added headers=HEADERS
-            response = requests.get(COINGECKO_API_URL, params=params, headers=HEADERS, timeout=30)
-
-            # Case A: Success
-            if response.status_code == 200:
-                return response.json()
-
-            # Case B: Rate Limit (429) -> Wait and Retry
-            if response.status_code == 429:
-                wait_time = (2 ** attempt) * 5  # 5s, 10s, 20s
-                print(f"   ⚠️ Rate limit (429). Sleeping {wait_time}s before retry {attempt+1}/{max_retries}...")
-                time.sleep(wait_time)
-                continue # Try again
-
-            # Case C: Other Errors (404, 500) -> Raise Exception (Fail Fast for critical errors)
-            response.raise_for_status()
-
-        except requests.exceptions.RequestException as error:
-            print(f"   ❌ Network Error (Attempt {attempt+1}): {error}")
-            if attempt == max_retries - 1:
-                raise error # Crash if we run out of retries
-            time.sleep(5) # Small wait before retry on network error
-
-    raise Exception(f"🚨 Failed to fetch batch after {max_retries} attempts.")
-
-def process_ingestion() -> Path:
-    """
-    Orchestrates the Bronze Layer ingestion process for the Local Environment.
-
-    WORKFLOW:
-    1. Configuration: Reads target coins from the .env file.
-    2. Batching: Splits the coin list into chunks to respect API limits.
-    3. Robust Fetching: Calls CoinGecko API with "Stealth" headers and Retry Logic.
-       - Behavior: Retries on 429 errors (up to 3 times) before giving up.
-       - Integrity: Raises Exception ONLY if all retries fail, preventing partial data writes.
-    4. Lineage: Injects 'ingested_timestamp' into every record.
-    5. Storage: Saves the combined raw JSON to the local filesystem (data/bronze/).
-
-    Returns:
-        Path: The file path of the saved JSON file.
-
-    Raises:
-        Exception: If a batch fails after maximum retries, the entire process stops.
-    """
-    print(f"🚀 Starting Bronze Layer - Local Ingestion.")
-
-    # 1. Setup Time and Config
-    capture_time = datetime.now(timezone.utc)
-    file_timestamp = capture_time.strftime("%Y%m%d_%H%M%S")
-
-    coin_list = [c.strip() for c in TARGET_CRYPTO_COINS.split(",")]
-    total_coins = len(coin_list)
-    total_batches = math.ceil(total_coins / BATCH_SIZE)
-
-    print(f"📋 Targets: {total_coins} Coins | Batches: {total_batches}")
-
-    # 2. Prepare Output
-    os.makedirs(INGEST_DATA_DIR, exist_ok=True)
-    all_market_data = []
-
-    # 3. Batch Loop
-    for i in range(0, total_coins, BATCH_SIZE):
-        current_batch_ids = coin_list[i : i + BATCH_SIZE]
-        batch_num = (i // BATCH_SIZE) + 1
-
-        print(f"🔄 Processing Batch {batch_num}/{total_batches} ({len(current_batch_ids)} coins).")
-
-        try:
-            batch_data = fetch_market_data_batch(current_batch_ids)
-
-            if batch_data:
-                all_market_data.extend(batch_data)
-                print(f"   ✅ Success: {len(batch_data)} records.")
-            else:
-                print(f"   ⚠️ Warning: Batch {batch_num} returned empty data.")
-
-            # Small courtesy sleep between batches
-            if batch_num < total_batches:
-                time.sleep(2) 
-
+            run_stream()
+        except KeyboardInterrupt:
+            print("\n🛑 Stopped.")
+            break
         except Exception as error:
-            print(f"❌ Critical Error on Batch {batch_num}: {error}")
-            raise error # This allows crash if the Retry Logic fails completely.
-
-    # 4. Lineage Injection
-    print("💉 Injecting lineage timestamps.")
-    for record in all_market_data:
-        record['ingested_timestamp'] = capture_time.isoformat()
-
-    # 5. Save to Disk
-    output_filename = f"raw_prices_{file_timestamp}.json"
-    output_path = INGEST_DATA_DIR / output_filename
-
-    with open(output_path, "w") as f:
-        json.dump(all_market_data, f, indent=4)
-
-    print(f"📦 Saved {len(all_market_data)} records to: {output_path}")
-    return output_path
+            print(f"\n⚠️ Error: {error}. Reconnecting.")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    process_ingestion()
+    parser = argparse.ArgumentParser(description="Data Center Bronze Ingestion Engine")
+    parser.add_argument("--mode", choices=["historical", "recent", "live"], required=True, help="Ingestion Mode")
+
+    args = parser.parse_args()
+
+    # Ensure Base Bronze Exists
+    os.makedirs(BRONZE_DIR, exist_ok=True)
+
+    if args.mode == "historical":
+        ingest_historical()
+    elif args.mode == "recent":
+        ingest_recent()
+    elif args.mode == "live":
+        ingest_live()
