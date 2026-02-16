@@ -21,25 +21,31 @@ BRONZE_DIR = PROJECT_ROOT / "data" / "bronze"
 # --- ASSET LISTS ---
 # The immutable master roster of assets to be ingested.
 # Changes here automatically propagate to all Historical, Recent, and Live ingestors.
+# --- ASSET LISTS ---
+# The immutable master roster of assets to be ingested.
+# Changes here automatically propagate to all Historical, Recent, and Live ingestors.
 CRYPTO_PAIRS = [
-    # Tier 1: Kings (Market Movers)
+    # Tier 1: The Kings (Market Movers)
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT",
-    # Tier 2: Utilities (Payments & Infrastructure)
-    "XRPUSDT", "ADAUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "LINKUSDT",
+    # Tier 2: The Veterans (Payment & Enterprise)
+    "XRPUSDT", "ADAUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", 
+    "DOTUSDT", "ATOMUSDT", "ETCUSDT", "VETUSDT",
     # Tier 3: Layer 2s (Scaling Solutions)
-    "ARBUSDT", "MATICUSDT", "OPUSDT",
-    # Tier 4: AI & Compute (High Growth Sector)
-    "FETUSDT", "RENDERUSDT", "TAOUSDT", "NEARUSDT",
-    # Tier 5: Gaming & Metaverse
-    "IMXUSDT", "GALAUSDT", "AXSUSDT",
-    # Tier 6: Storage
-    "FILUSDT", "ARUSDT",
-    # Tier 7: DeFi & Real World Assets
-    "UNIUSDT", "AAVEUSDT", "ONDOUSDT",
-    # Tier 8: New Gen L1s
-    "SUIUSDT", "SEIUSDT", "TIAUSDT",
-    # Tier 9: High Volatility (Memes)
-    "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "WIFUSDT"
+    "ARBUSDT", "MATICUSDT", "OPUSDT", "STRKUSDT", "IMXUSDT", "MNTUSDT",
+    # Tier 4: AI & Data (The 2024/25 Narrative)
+    "FETUSDT", "RENDERUSDT", "TAOUSDT", "NEARUSDT", "GRTUSDT", "WLDUSDT", "ARKMUSDT",
+    # Tier 5: DeFi & Real Yield
+    "UNIUSDT", "AAVEUSDT", "MKRUSDT", "LDOUSDT", "RUNEUSDT", 
+    "JUPUSDT", "ENAUSDT", "PENDLEUSDT", "INJUSDT",
+    # Tier 6: High Performance L1s (The "Solana Killers")
+    "AVAXUSDT", "SUIUSDT", "SEIUSDT", "APTUSDT", "KASUSDT", 
+    "HBARUSDT", "FTMUSDT", "TIAUSDT",
+    # Tier 7: Gaming & Metaverse
+    "GALAUSDT", "AXSUSDT", "SANDUSDT", "MANAUSDT", "BEAMXUSDT",
+    # Tier 8: Storage & Infrastructure
+    "FILUSDT", "ARUSDT", "PYTHUSDT", "LINKUSDT",
+    # Tier 9: The Memes (High Risk/Reward)
+    "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "WIFUSDT", "BONKUSDT", "FLOKIUSDT"
 ]
 
 # --- PROVIDER SETTINGS ---
@@ -59,37 +65,32 @@ COINGECKO_CONFIG = {
     "Delay_Seconds": 15, # Be polite! CoinGecko bans aggressive crawlers.
     # I map Binance Symbols (BTCUSDT) to CoinGecko IDs (bitcoin)
     "ID_MAP": {
-        "BTCUSDT": "bitcoin",
-        "ETHUSDT": "ethereum",
-        "BNBUSDT": "binancecoin",
-        "SOLUSDT": "solana",
-        "XRPUSDT": "ripple",
-        "ADAUSDT": "cardano",
-        "AVAXUSDT": "avalanche-2",
-        "TRXUSDT": "tron",
-        "LTCUSDT": "litecoin",
-        "LINKUSDT": "chainlink",
-        "ARBUSDT": "arbitrum",
-        "MATICUSDT": "matic-network",
-        "OPUSDT": "optimism",
-        "FETUSDT": "fetch-ai",
-        "RENDERUSDT": "render-token",
-        "TAOUSDT": "bittensor",
-        "NEARUSDT": "near",
-        "IMXUSDT": "immutable-x",
-        "GALAUSDT": "gala",
-        "AXSUSDT": "axie-infinity",
-        "FILUSDT": "filecoin",
-        "ARUSDT": "arweave",
-        "UNIUSDT": "uniswap",
-        "AAVEUSDT": "aave",
-        "ONDOUSDT": "ondo-finance",
-        "SUIUSDT": "sui",
-        "SEIUSDT": "sei-network",
-        "TIAUSDT": "celestia",
-        "DOGEUSDT": "dogecoin",
-        "SHIBUSDT": "shiba-inu",
-        "PEPEUSDT": "pepe",
-        "WIFUSDT": "dogwifcoin"
+        # Kings
+        "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "BNBUSDT": "binancecoin", "SOLUSDT": "solana",
+        # Veterans
+        "XRPUSDT": "ripple", "ADAUSDT": "cardano", "TRXUSDT": "tron", "LTCUSDT": "litecoin",
+        "BCHUSDT": "bitcoin-cash", "DOTUSDT": "polkadot", "ATOMUSDT": "cosmos", 
+        "ETCUSDT": "ethereum-classic", "VETUSDT": "vechain",
+        # L2s
+        "ARBUSDT": "arbitrum", "MATICUSDT": "matic-network", "OPUSDT": "optimism",
+        "STRKUSDT": "starknet", "IMXUSDT": "immutable-x", "MNTUSDT": "mantle",
+        # AI
+        "FETUSDT": "fetch-ai", "RENDERUSDT": "render-token", "TAOUSDT": "bittensor",
+        "NEARUSDT": "near", "GRTUSDT": "the-graph", "WLDUSDT": "worldcoin-wld", "ARKMUSDT": "arkham",
+        # DeFi
+        "UNIUSDT": "uniswap", "AAVEUSDT": "aave", "MKRUSDT": "maker", "LDOUSDT": "lido-dao",
+        "RUNEUSDT": "thorchain", "JUPUSDT": "jupiter-exchange-solana", "ENAUSDT": "ethena-labs",
+        "PENDLEUSDT": "pendle", "INJUSDT": "injective-protocol", "ONDOUSDT": "ondo-finance",
+        # L1s
+        "AVAXUSDT": "avalanche-2", "SUIUSDT": "sui", "SEIUSDT": "sei-network", "APTUSDT": "aptos",
+        "KASUSDT": "kaspa", "HBARUSDT": "hedera-hashgraph", "FTMUSDT": "fantom", "TIAUSDT": "celestia",
+        # Gaming
+        "GALAUSDT": "gala", "AXSUSDT": "axie-infinity", "SANDUSDT": "the-sandbox",
+        "MANAUSDT": "decentraland", "BEAMXUSDT": "beam-2",
+        # Infra
+        "FILUSDT": "filecoin", "ARUSDT": "arweave", "PYTHUSDT": "pyth-network", "LINKUSDT": "chainlink",
+        # Memes
+        "DOGEUSDT": "dogecoin", "SHIBUSDT": "shiba-inu", "PEPEUSDT": "pepe",
+        "WIFUSDT": "dogwifcoin", "BONKUSDT": "bonk", "FLOKIUSDT": "floki"
     }
 }
