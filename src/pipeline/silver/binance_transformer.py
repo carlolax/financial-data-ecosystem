@@ -42,6 +42,16 @@ class BinanceTransformer(BaseTransformer):
         Returns:
             pd.DataFrame: A clean, typed, and schema-compliant DataFrame.
         """
+        # Hardening: Schema Validation
+        # 1. Column Count Check (Binance 1m Klines always have 12 columns)
+        if df.shape[1] != 12:
+            raise ValueError(f"Schema Mismatch! Expected 12 columns, got {df.shape[1]} for {symbol}.")
+
+        # 2. Data Type Check (Column 0 must be the Open Time integer)
+        # If it's not numeric, I am likely reading a header row or garbage data.
+        if not pd.api.types.is_numeric_dtype(df.iloc[:, 0]):
+             raise ValueError(f"Type Mismatch! Column 0 is not numeric for {symbol}. Possible corrupt CSV.")
+
         # 1. Apply Semantic Naming (Map index 0 -> 'open_time_ms')
         df.rename(columns=COLUMN_MAPPING, inplace=True)
 
