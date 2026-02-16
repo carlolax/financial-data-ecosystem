@@ -50,3 +50,46 @@ BINANCE_CONFIG = {
     "WS_URL": "wss://stream.binance.com:9443/ws",
     "INTERVAL": "1m"  # The granular time-frame for all data (1-Minute Candles)
 }
+
+# --- METADATA PROVIDER SETTINGS ---
+# I use CoinGecko to fetch 'Rich Context' (Logos, Descriptions, Categories).
+COINGECKO_CONFIG = {
+    "BASE_URL": "https://api.coingecko.com/api/v3",
+    "Max_Retries": 3,
+    "Delay_Seconds": 15, # Be polite! CoinGecko bans aggressive crawlers.
+    # I map Binance Symbols (BTCUSDT) to CoinGecko IDs (bitcoin)
+    "ID_MAP": {
+        "BTCUSDT": "bitcoin",
+        "ETHUSDT": "ethereum",
+        "BNBUSDT": "binancecoin",
+        "SOLUSDT": "solana",
+        "XRPUSDT": "ripple",
+        "ADAUSDT": "cardano",
+        "AVAXUSDT": "avalanche-2",
+        "TRXUSDT": "tron",
+        "LTCUSDT": "litecoin",
+        "LINKUSDT": "chainlink",
+        "ARBUSDT": "arbitrum",
+        "MATICUSDT": "matic-network",
+        "OPUSDT": "optimism",
+        "FETUSDT": "fetch-ai",
+        "RENDERUSDT": "render-token",
+        "TAOUSDT": "bittensor",
+        "NEARUSDT": "near",
+        "IMXUSDT": "immutable-x",
+        "GALAUSDT": "gala",
+        "AXSUSDT": "axie-infinity",
+        "FILUSDT": "filecoin",
+        "ARUSDT": "arweave",
+        "UNIUSDT": "uniswap",
+        "AAVEUSDT": "aave",
+        "ONDOUSDT": "ondo-finance",
+        "SUIUSDT": "sui",
+        "SEIUSDT": "sei-network",
+        "TIAUSDT": "celestia",
+        "DOGEUSDT": "dogecoin",
+        "SHIBUSDT": "shiba-inu",
+        "PEPEUSDT": "pepe",
+        "WIFUSDT": "dogwifcoin"
+    }
+}

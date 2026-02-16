@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 from .binance_ingestor import BinanceIngestor
+from .coingecko_ingestor import CoinGeckoIngestor
 
 def main():
     """
@@ -21,9 +22,9 @@ def main():
     # Argument 1: The Mode (Time Horizon)
     parser.add_argument(
         "--mode", 
-        choices=["historical", "recent", "live"], 
+        choices=["historical", "recent", "live", "metadata"],
         required=True, 
-        help="Selects the ingestion phase: 'historical' (Archive), 'recent' (Gap-Fill), or 'live' (Real-Time)."
+        help="Selects the ingestion phase: 'historical' (Archive), 'recent' (Gap-Fill), 'live' (Real-Time), or 'metadata' (Enrichment)."
     )
 
     # Argument 2: The Source (Data Provider)
@@ -37,6 +38,13 @@ def main():
     args = parser.parse_args()
 
     # Factory Logic: Select the Strategy based on input
+    if args.mode == "metadata":
+        # Metadata is special; it doesn't need a specific 'source' arg usually, 
+        # but I default to CoinGecko for now.
+        crawler = CoinGeckoIngestor()
+        crawler.ingest_metadata()
+        return
+
     ingestor = None
     if args.source == "binance":
         ingestor = BinanceIngestor()
