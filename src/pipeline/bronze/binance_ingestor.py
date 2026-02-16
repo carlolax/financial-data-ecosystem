@@ -1,10 +1,10 @@
 import requests
-import os
 import websocket
 import json
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from .base import BaseIngestor
 from .config import CRYPTO_PAIRS, BINANCE_CONFIG
@@ -26,6 +26,23 @@ class BinanceIngestor(BaseIngestor):
         self.pairs = CRYPTO_PAIRS
         self.config = BINANCE_CONFIG
 
+    def _is_valid_zip(self, file_path: Path) -> bool:
+        """
+        Helper: Checks if a file is a valid, non-empty Zip archive.
+        """
+        if not file_path.exists():
+            return False
+
+        # Check if the file is empty
+        if file_path.stat().st_size == 0:
+            return False
+
+        # Check if the zip structure is intact
+        if not zipfile.is_zipfile(file_path):
+            return False
+
+        return True
+
     def ingest_historical(self):
         """
         Downloads monthly 1-minute kline archives (Zip format) from Binance Vision.
@@ -34,14 +51,14 @@ class BinanceIngestor(BaseIngestor):
         Storage: data/bronze/crypto_binance/historical_monthly/{symbol}/
         """
         print(f"🏛️  Initiating Deep Historical Backfill for {len(self.pairs)} assets.")
-        dest_dir = self.base_path / "historical_monthly"
+        dest_dir: Path = self.base_path / "historical_monthly"
 
         years = ["2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"]
         months = [f"{i:02d}" for i in range(1, 13)]
 
         for symbol in self.pairs:
             coin_dir = dest_dir / symbol.replace("USDT", "").lower()
-            os.makedirs(coin_dir, exist_ok=True)
+            coin_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"\nScanning archives for {symbol}.")
             for year in years:
@@ -53,23 +70,30 @@ class BinanceIngestor(BaseIngestor):
                     url = f"{self.config['MONTHLY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
                     save_path = coin_dir / filename
 
+                    # Hardening: Check existing file integrity
                     if save_path.exists():
-                        continue
+                        if self._is_valid_zip(save_path):
+                            continue
+                        else:
+                            print(f"  🗑️  Found corrupt/empty file: {filename}. Deleting.")
+                            save_path.unlink()
 
+                    # Download Logic
                     try:
                         print(f"  ⬇️  Downloading: {year}-{month}.", end="\r")
                         resp = requests.get(url)
                         if resp.status_code == 200:
                             with open(save_path, "wb") as f:
                                 f.write(resp.content)
-
-                            if not zipfile.is_zipfile(save_path):
-                                os.remove(save_path)
-                                print(f"\n  ❌ Integrity Check Failed: {filename}")
+                            
+                            # Post-Download Verification
+                            if not self._is_valid_zip(save_path):
+                                save_path.unlink()
+                                print(f"\n  ❌ Integrity Check Failed (Deleted): {filename}")
                             else:
                                 print(f"  ✅ Secured: {filename}       ", end="\r")
                     except Exception as error:
-                        print(f"\n  ❌ Error: {error}")
+                        print(f"\n  ❌ Network Error: {error}")
 
     def ingest_recent(self):
         """
@@ -79,7 +103,7 @@ class BinanceIngestor(BaseIngestor):
         Storage: data/bronze/crypto_binance/recent_daily/{symbol}/
         """
         print("\n📅  Synchronizing Recent Daily Data.")
-        dest_dir = self.base_path / "recent_daily"
+        dest_dir: Path = self.base_path / "recent_daily"
 
         today = datetime.now(timezone.utc)
         start_date = today.replace(day=1)
@@ -93,7 +117,7 @@ class BinanceIngestor(BaseIngestor):
 
         for symbol in self.pairs:
             coin_dir = dest_dir / symbol.replace("USDT", "").lower()
-            os.makedirs(coin_dir, exist_ok=True)
+            coin_dir.mkdir(parents=True, exist_ok=True)
 
             for d in dates:
                 date_str = d.strftime("%Y-%m-%d")
@@ -101,8 +125,13 @@ class BinanceIngestor(BaseIngestor):
                 url = f"{self.config['DAILY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
                 save_path = coin_dir / filename
 
+                # Hardening using integrity check
                 if save_path.exists():
-                    continue
+                    if self._is_valid_zip(save_path):
+                        continue
+                    else:
+                        print(f"  🗑️  Found corrupt/empty file: {filename}. Deleting.")
+                        save_path.unlink()
 
                 try:
                     print(f"  ⬇️  Fetching: {date_str}.", end="\r")
@@ -110,8 +139,9 @@ class BinanceIngestor(BaseIngestor):
                     if resp.status_code == 200:
                         with open(save_path, "wb") as f:
                             f.write(resp.content)
-                        if not zipfile.is_zipfile(save_path):
-                            os.remove(save_path)
+
+                        if not self._is_valid_zip(save_path):
+                            save_path.unlink()
                     elif resp.status_code == 404:
                         print(f"  ⚠️  Pending: {date_str}        ", end="\r")
                 except Exception as error:
@@ -125,15 +155,15 @@ class BinanceIngestor(BaseIngestor):
         Storage: data/bronze/crypto_binance/live_buffer/stream_buffer.csv
         """
         print("\n📡  Establishing Real-Time WebSocket Connection.")
-        buffer_file = self.base_path / "live_buffer" / "stream_buffer.csv"
-        os.makedirs(buffer_file.parent, exist_ok=True)
+        buffer_file: Path = self.base_path / "live_buffer" / "stream_buffer.csv"
+        buffer_file.parent.mkdir(parents=True, exist_ok=True)
 
-        def on_open(ws):
+        def on_open(_ws):
             print("  🔌 Connected.")
             params = [f"{c.lower()}@kline_1m" for c in self.pairs]
-            ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
+            _ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
 
-        def on_message(ws, message):
+        def on_message(_ws, message):
             data = json.loads(message)
             if 'k' in data and data['k']['x']: 
                 k = data['k']
