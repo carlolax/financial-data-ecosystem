@@ -14,7 +14,7 @@ from typing import Optional
 
 from .binance_ingestor import BinanceIngestor
 from .coingecko_ingestor import CoinGeckoIngestor
-from .base import BaseIngestor
+from .base_ingestor import BaseIngestor
 
 def main() -> None:
     """

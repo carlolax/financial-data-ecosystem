@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .base import BaseIngestor
+from .base_ingestor import BaseIngestor
 from .config import CRYPTO_PAIRS, BINANCE_CONFIG
 
 class BinanceIngestor(BaseIngestor):
