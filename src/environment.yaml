@@ -1,4 +1,4 @@
-name: crypto-env
+name: financial-env
 channels:
   - conda-forge
   - defaults
@@ -13,10 +13,12 @@ dependencies:
     - gcsfs
     - google-cloud-storage
     - pandas
+    - pandas-ta
     - plotly
     - pytest
     - pytest-mock
     - python-dotenv
+    - numpy
     - requests
     - streamlit
     - urllib3
