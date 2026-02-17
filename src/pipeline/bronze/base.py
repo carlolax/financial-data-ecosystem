@@ -1,5 +1,5 @@
-import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 from .config import BRONZE_DIR
 
 class BaseIngestor(ABC):
@@ -16,7 +16,7 @@ class BaseIngestor(ABC):
         base_path (Path): The absolute path to the bronze storage directory for this asset type.
     """
 
-    def __init__(self, asset_type: str):
+    def __init__(self, asset_type: str) -> None:
         """
         Initializes the Ingestor and provisions the storage directory.
 
@@ -24,13 +24,14 @@ class BaseIngestor(ABC):
             asset_type (str): A unique identifier for the data source (e.g., 'stocks_yahoo').
                               This is used to create a dedicated folder in the Bronze layer.
         """
-        self.asset_type = asset_type
-        self.base_path = BRONZE_DIR / asset_type
-        # Ensure the destination directory exists before any operation begins
-        os.makedirs(self.base_path, exist_ok=True)
+        self.asset_type: str = asset_type
+        self.base_path: Path = BRONZE_DIR / asset_type
+
+        # Ensure the destination directory exists
+        self.base_path.mkdir(parents=True, exist_ok=True)
 
     @abstractmethod
-    def ingest_historical(self):
+    def ingest_historical(self) -> None:
         """
         Orchestrates the massive retrieval of deep historical archives.
 
@@ -42,7 +43,7 @@ class BaseIngestor(ABC):
         pass
 
     @abstractmethod
-    def ingest_recent(self):
+    def ingest_recent(self) -> None:
         """
         Bridges the temporal gap between the historical archives and the present day.
 
@@ -53,7 +54,7 @@ class BaseIngestor(ABC):
         pass
 
     @abstractmethod
-    def ingest_live(self):
+    def ingest_live(self) -> None:
         """
         Establishes a persistent, real-time connection to the market.
 

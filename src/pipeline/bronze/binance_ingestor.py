@@ -18,17 +18,17 @@ class BinanceIngestor(BaseIngestor):
     zip file handling, and WebSocket subscription management.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initializes the Binance Ingestor with the master crypto pair list.
         """
         super().__init__(asset_type="crypto_binance")
-        self.pairs = CRYPTO_PAIRS
-        self.config = BINANCE_CONFIG
+        self.pairs: list[str] = CRYPTO_PAIRS
+        self.config: dict = BINANCE_CONFIG
 
     def _is_valid_zip(self, file_path: Path) -> bool:
         """
-        Helper: Checks if a file is a valid, non-empty Zip archive.
+        Checks if a file is a valid, non-empty Zip archive.
         """
         if not file_path.exists():
             return False
@@ -43,7 +43,7 @@ class BinanceIngestor(BaseIngestor):
 
         return True
 
-    def ingest_historical(self):
+    def ingest_historical(self) -> None:
         """
         Downloads monthly 1-minute kline archives (Zip format) from Binance Vision.
 
@@ -53,11 +53,11 @@ class BinanceIngestor(BaseIngestor):
         print(f"🏛️  Initiating Deep Historical Backfill for {len(self.pairs)} assets.")
         dest_dir: Path = self.base_path / "historical_monthly"
 
-        years = ["2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"]
-        months = [f"{i:02d}" for i in range(1, 13)]
+        years: list[str] = ["2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"]
+        months: list[str] = [f"{i:02d}" for i in range(1, 13)]
 
         for symbol in self.pairs:
-            coin_dir = dest_dir / symbol.replace("USDT", "").lower()
+            coin_dir: Path = dest_dir / symbol.replace("USDT", "").lower()
             coin_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"\nScanning archives for {symbol}.")
@@ -66,9 +66,9 @@ class BinanceIngestor(BaseIngestor):
                     if year == "2017" and int(month) < 8:
                         continue
 
-                    filename = f"{symbol}-{self.config['INTERVAL']}-{year}-{month}.zip"
-                    url = f"{self.config['MONTHLY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
-                    save_path = coin_dir / filename
+                    filename: str = f"{symbol}-{self.config['INTERVAL']}-{year}-{month}.zip"
+                    url: str = f"{self.config['MONTHLY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
+                    save_path: Path = coin_dir / filename
 
                     # Hardening: Check existing file integrity
                     if save_path.exists():
@@ -85,7 +85,7 @@ class BinanceIngestor(BaseIngestor):
                         if resp.status_code == 200:
                             with open(save_path, "wb") as f:
                                 f.write(resp.content)
-                            
+
                             # Post-Download Verification
                             if not self._is_valid_zip(save_path):
                                 save_path.unlink()
@@ -95,7 +95,7 @@ class BinanceIngestor(BaseIngestor):
                     except Exception as error:
                         print(f"\n  ❌ Network Error: {error}")
 
-    def ingest_recent(self):
+    def ingest_recent(self) -> None:
         """
         Downloads daily 1-minute kline archives for the current incomplete month.
 
@@ -105,27 +105,27 @@ class BinanceIngestor(BaseIngestor):
         print("\n📅  Synchronizing Recent Daily Data.")
         dest_dir: Path = self.base_path / "recent_daily"
 
-        today = datetime.now(timezone.utc)
-        start_date = today.replace(day=1)
-        end_date = today - timedelta(days=1)
+        today: datetime = datetime.now(timezone.utc)
+        start_date: datetime = today.replace(day=1)
+        end_date: datetime = today - timedelta(days=1)
 
-        dates = []
-        curr = start_date
+        dates: list[datetime] = []
+        curr: datetime = start_date
         while curr <= end_date:
             dates.append(curr)
             curr += timedelta(days=1)
 
         for symbol in self.pairs:
-            coin_dir = dest_dir / symbol.replace("USDT", "").lower()
+            coin_dir: Path = dest_dir / symbol.replace("USDT", "").lower()
             coin_dir.mkdir(parents=True, exist_ok=True)
 
             for d in dates:
-                date_str = d.strftime("%Y-%m-%d")
-                filename = f"{symbol}-{self.config['INTERVAL']}-{date_str}.zip"
-                url = f"{self.config['DAILY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
-                save_path = coin_dir / filename
+                date_str: str = d.strftime("%Y-%m-%d")
+                filename: str = f"{symbol}-{self.config['INTERVAL']}-{date_str}.zip"
+                url: str = f"{self.config['DAILY_URL']}/{symbol}/{self.config['INTERVAL']}/{filename}"
+                save_path: Path = coin_dir / filename
 
-                # Hardening using integrity check
+                # Hardening: Check existing file integrity
                 if save_path.exists():
                     if self._is_valid_zip(save_path):
                         continue
@@ -147,7 +147,7 @@ class BinanceIngestor(BaseIngestor):
                 except Exception as error:
                     print(f"\n  ❌ Error: {error}")
 
-    def ingest_live(self):
+    def ingest_live(self) -> None:
         """
         Connects to the Binance WebSocket Stream to capture real-time market data.
 
@@ -158,12 +158,12 @@ class BinanceIngestor(BaseIngestor):
         buffer_file: Path = self.base_path / "live_buffer" / "stream_buffer.csv"
         buffer_file.parent.mkdir(parents=True, exist_ok=True)
 
-        def on_open(_ws):
+        def on_open(_ws: websocket.WebSocketApp) -> None:
             print("  🔌 Connected.")
             params = [f"{c.lower()}@kline_1m" for c in self.pairs]
             _ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
 
-        def on_message(_ws, message):
+        def on_message(_ws: websocket.WebSocketApp, message: str) -> None:
             data = json.loads(message)
             if 'k' in data and data['k']['x']: 
                 k = data['k']

@@ -1,7 +1,9 @@
 import requests
 import time
 import json
-import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 from .config import BRONZE_DIR, CRYPTO_PAIRS, COINGECKO_CONFIG
 
 class CoinGeckoIngestor:
@@ -21,21 +23,23 @@ class CoinGeckoIngestor:
         to ensure compliance and prevent IP bans.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initializes the Metadata Crawler with provider settings and storage paths.
         """
-        self.base_url = COINGECKO_CONFIG["BASE_URL"]
-        self.id_map = COINGECKO_CONFIG["ID_MAP"]
-        self.delay = COINGECKO_CONFIG["Delay_Seconds"]
-        self.max_retries = COINGECKO_CONFIG["Max_Retries"]
+        self.base_url: str = COINGECKO_CONFIG["BASE_URL"]
+        self.id_map: Dict[str, str] = COINGECKO_CONFIG["ID_MAP"]
+        self.delay: int = COINGECKO_CONFIG["Delay_Seconds"]
+        self.max_retries: int = COINGECKO_CONFIG["Max_Retries"]
 
         # Storage: data/bronze/metadata/coingecko_raw.json
-        self.output_dir = BRONZE_DIR / "metadata"
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.output_file = self.output_dir / "coingecko_raw.json"
+        self.output_dir: Path = BRONZE_DIR / "metadata"
 
-    def ingest_metadata(self):
+        # Ensure directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_file: Path = self.output_dir / "coingecko_raw.json"
+
+    def ingest_metadata(self) -> None:
         """
         Executes the rate-limited crawling strategy to harvest asset details.
 
@@ -51,8 +55,8 @@ class CoinGeckoIngestor:
         print(f"🦎 Initiating CoinGecko Metadata Crawl for {len(CRYPTO_PAIRS)} assets.")
         print(f"   (Delay set to {self.delay}s to respect API Rate Limits)")
 
-        # 1. Load existing data if I have it (Resume capability)
-        full_data = {}
+        # 1. Load existing data if I have it
+        full_data: Dict[str, Any] = {}
         if self.output_file.exists():
             try:
                 with open(self.output_file, "r") as f:
@@ -69,23 +73,28 @@ class CoinGeckoIngestor:
                 print(f"  ⏩ Skipping {symbol} (Metadata already secured)")
                 continue
 
-            cg_id = self.id_map.get(symbol)
+            cg_id: Optional[str] = self.id_map.get(symbol)
             if not cg_id:
                 print(f"  ⚠️  Configuration Error: No CoinGecko ID map found for {symbol}")
                 continue
 
             # API Endpoint: specific to fetching static coin details
-            url = f"{self.base_url}/coins/{cg_id}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false"
+            url: str = f"{self.base_url}/coins/{cg_id}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false"
 
             try:
                 print(f"  ⬇️  Fetching Context: {symbol} ({cg_id}).", end="\r")
                 resp = requests.get(url)
 
                 if resp.status_code == 200:
-                    data = resp.json()
+                    data: Dict[str, Any] = resp.json()
 
                     # Extract only the high-value fields (Bronze = Raw, but selective)
-                    extracted = {
+                    # Helper to safely get the first homepage link
+                    links = data.get("links", {})
+                    homepage_list = links.get("homepage", [])
+                    homepage_url = homepage_list[0] if isinstance(homepage_list, list) and homepage_list else ""
+
+                    extracted: Dict[str, Any] = {
                         "id": data.get("id"),
                         "symbol": data.get("symbol"),
                         "name": data.get("name"),
@@ -93,7 +102,7 @@ class CoinGeckoIngestor:
                         "categories": data.get("categories", []),
                         "image": data.get("image", {}).get("large", ""),
                         "genesis_date": data.get("genesis_date"),
-                        "homepage": (data.get("links", {}).get("homepage", []) or [""])[0]
+                        "homepage": homepage_url
                     }
 
                     full_data[symbol] = extracted

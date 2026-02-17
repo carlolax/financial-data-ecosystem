@@ -12,19 +12,17 @@ Key Responsibilities:
 """
 
 from pathlib import Path
+from typing import List, Dict, Union
 
 # --- DIRECTORY SETUP ---
 # Resolves to the absolute path of: project_root/data/bronze
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-BRONZE_DIR = PROJECT_ROOT / "data" / "bronze"
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent.parent
+BRONZE_DIR: Path = PROJECT_ROOT / "data" / "bronze"
 
 # --- ASSET LISTS ---
 # The immutable master roster of assets to be ingested.
 # Changes here automatically propagate to all Historical, Recent, and Live ingestors.
-# --- ASSET LISTS ---
-# The immutable master roster of assets to be ingested.
-# Changes here automatically propagate to all Historical, Recent, and Live ingestors.
-CRYPTO_PAIRS = [
+CRYPTO_PAIRS: List[str] = [
     # Tier 1: The Kings (Market Movers)
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT",
     # Tier 2: The Veterans (Payment & Enterprise)
@@ -50,7 +48,7 @@ CRYPTO_PAIRS = [
 
 # --- PROVIDER SETTINGS ---
 # Configuration constants for the Binance Public Data API.
-BINANCE_CONFIG = {
+BINANCE_CONFIG: Dict[str, str] = {
     "MONTHLY_URL": "https://data.binance.vision/data/spot/monthly/klines",
     "DAILY_URL": "https://data.binance.vision/data/spot/daily/klines",
     "WS_URL": "wss://stream.binance.com:9443/ws",
@@ -59,10 +57,10 @@ BINANCE_CONFIG = {
 
 # --- METADATA PROVIDER SETTINGS ---
 # I use CoinGecko to fetch 'Rich Context' (Logos, Descriptions, Categories).
-COINGECKO_CONFIG = {
+COINGECKO_CONFIG: Dict[str, Union[str, int, Dict[str, str]]] = {
     "BASE_URL": "https://api.coingecko.com/api/v3",
     "Max_Retries": 3,
-    "Delay_Seconds": 15, # Be polite! CoinGecko bans aggressive crawlers.
+    "Delay_Seconds": 15,
     # I map Binance Symbols (BTCUSDT) to CoinGecko IDs (bitcoin)
     "ID_MAP": {
         # Kings

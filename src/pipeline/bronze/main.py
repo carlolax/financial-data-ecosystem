@@ -10,10 +10,13 @@ Usage:
 """
 
 import argparse
+from typing import Optional
+
 from .binance_ingestor import BinanceIngestor
 from .coingecko_ingestor import CoinGeckoIngestor
+from .base import BaseIngestor
 
-def main():
+def main() -> None:
     """
     Parses command-line arguments and instantiates the selected Ingestion Strategy.
     """
@@ -45,7 +48,9 @@ def main():
         crawler.ingest_metadata()
         return
 
-    ingestor = None
+    # Initialize the ingestor variable with the Base class type hint
+    ingestor: Optional[BaseIngestor] = None
+
     if args.source == "binance":
         ingestor = BinanceIngestor()
 
