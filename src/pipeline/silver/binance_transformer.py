@@ -83,6 +83,7 @@ class BinanceTransformer(BaseTransformer):
         Workflow:
         - Scans 'data/bronze/crypto_binance/historical_monthly/{coin}/'
         - Aggregates ALL monthly files for a single coin into one master DataFrame.
+        - Deduplicates records to resolve overlaps between monthly and daily files.
         - Saves a single optimized Parquet file: 'data/silver/crypto_binance/coin_id={coin}/historical_master.parquet'
         """
         print(f"🔨 Initiating Silver Transformation (Historical) for {len(self.pairs)} assets.")
@@ -128,8 +129,14 @@ class BinanceTransformer(BaseTransformer):
                     print(f"\n  ❌ Error reading archive {zip_path.name}: {error}")
 
             if all_dfs:
-                # Merge months -> Sort by Time -> Write Parquet
+                # Merge months
                 master_df = pd.concat(all_dfs)
+
+                # Deduplication Shield
+                # Resolve overlaps: If timestamps collide, keep the last one processed.
+                master_df.drop_duplicates(subset=["source_updated_at"], keep="last", inplace=True)
+
+                # Sort by Time -> Write Parquet
                 master_df.sort_values("source_updated_at", inplace=True)
 
                 master_df.to_parquet(output_file, compression=PARQUET_COMPRESSION)
