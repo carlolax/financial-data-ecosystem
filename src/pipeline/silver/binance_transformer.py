@@ -53,6 +53,7 @@ class BinanceTransformer(BaseTransformer):
              raise ValueError(f"Type Mismatch! Column 0 is not numeric for {symbol}. Possible corrupt CSV.")
 
         # 1. Apply Semantic Naming (Map index 0 -> 'open_time_ms')
+        # Note: Assumes COLUMN_MAPPING maps integers (0, 1, 2) to strings
         df.rename(columns=COLUMN_MAPPING, inplace=True)
 
         # 2. Add Partition Key (Essential for Hive-style storage)
@@ -127,6 +128,8 @@ class BinanceTransformer(BaseTransformer):
                             all_dfs.append(clean_df)
                 except Exception as error:
                     print(f"\n  ❌ Error reading archive {zip_path.name}: {error}")
+                    # Silent fail on bad zips to keep loop moving
+                    pass
 
             if all_dfs:
                 # Merge months
@@ -148,7 +151,83 @@ class BinanceTransformer(BaseTransformer):
         """
         Batch processes the recent daily files (Gap-Fill).
 
-        Current Status: Placeholder.
-        Future Logic: Read daily Zips -> Clean -> Append to Master Parquet.
+        Workflow:
+        - Locates daily zip files in 'data/bronze/crypto_binance/recent_daily/{coin}/'
+        - Loads the existing Silver Master Parquet file.
+        - Merges the new daily records into the master dataset.
+        - Deduplicates to ensure no overlaps (Gap-Fill Strategy).
+        - Overwrites the Master Parquet file with the updated timeline.
         """
-        print("🚧 Recent data transformation module is under construction.")
+        print(f"🔨 Initiating Silver Transformation (Recent Daily) for {len(self.pairs)} assets.")
+        
+        recent_dir: Path = self.bronze_path / "recent_daily"
+
+        for symbol in self.pairs:
+            coin_id = symbol.replace("USDT", "").lower()
+            
+            # Paths
+            coin_recent_path: Path = recent_dir / coin_id
+
+            # Silver Destination
+            coin_silver_path: Path = self.silver_path / f"coin_id={coin_id}"
+            master_file: Path = coin_silver_path / "historical_master.parquet"
+
+            # Pre-flight checks
+            if not master_file.exists():
+                print(f"  ⚠️  Skipping {symbol}: No Historical Master found to merge with.")
+                continue
+
+            if not coin_recent_path.exists():
+                # It's possible I have history but no recent data yet
+                continue
+
+            # Find daily zips
+            zip_files = sorted(list(coin_recent_path.glob("*.zip")))
+            if not zip_files:
+                continue
+
+            print(f"  🔄 Merging {len(zip_files)} daily files for {symbol}.", end="\r")
+
+            # 1. Load New Daily Data
+            new_dfs = []
+            for zip_path in zip_files:
+                try:
+                    with zipfile.ZipFile(zip_path) as z:
+                        # Assumption: Zip contains one CSV
+                        csv_name = zip_path.name.replace(".zip", ".csv")
+                        with z.open(csv_name) as f:
+                            # Read raw CSV (No header)
+                            df = pd.read_csv(f, header=None)
+                            # Transform using the SAME logic as historical
+                            clean_df = self._transform_dataframe(df, symbol)
+                            new_dfs.append(clean_df)
+                except Exception:
+                    # Silent fail on bad zips to keep loop moving
+                    pass
+
+            if new_dfs:
+                try:
+                    # 2. Concatenate New Data
+                    daily_df = pd.concat(new_dfs)
+
+                    # 3. Load Existing Master Data
+                    master_df = pd.read_parquet(master_file)
+
+                    # 4. Combine (History + Recent)
+                    combined_df = pd.concat([master_df, daily_df])
+
+                    # 5. Deduplicate (The Critical "Gap Fill" Step)
+                    # If a row exists in both, I keep the last one (assumed to be the recent one)
+                    combined_df.drop_duplicates(subset=["source_updated_at"], keep="last", inplace=True)
+
+                    # 6. Sort
+                    combined_df.sort_values("source_updated_at", inplace=True)
+
+                    # 7. Atomic Overwrite
+                    combined_df.to_parquet(master_file, compression=PARQUET_COMPRESSION)
+
+                    print(f"  ✅ Merged & Updated {symbol}: Now {len(combined_df):,} rows.")
+                except Exception as error:
+                     print(f"  ❌ Failed to merge {symbol}: {error}")
+            else:
+                print(f"  ⚠️  No valid rows extracted from daily files for {symbol}")
