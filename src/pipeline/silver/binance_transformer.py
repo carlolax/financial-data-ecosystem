@@ -3,7 +3,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .base import BaseTransformer
+from .base_transformer import BaseTransformer
 from .config import CRYPTO_PAIRS, COLUMN_MAPPING, FINAL_COLUMNS, PARQUET_COMPRESSION
 
 class BinanceTransformer(BaseTransformer):

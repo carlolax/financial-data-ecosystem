@@ -1,4 +1,3 @@
-import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from .config import SILVER_DIR, BRONZE_DIR
@@ -31,15 +30,15 @@ class BaseTransformer(ABC):
             dataset_name (str): The directory name used in the Bronze layer 
                                 (e.g., 'crypto_binance'). This maps 1:1 to the Silver layer.
         """
-        self.dataset_name = dataset_name
-        self.bronze_path = BRONZE_DIR / dataset_name
-        self.silver_path = SILVER_DIR / dataset_name
-        
-        # Ensure the destination directory exists before processing begins
-        os.makedirs(self.silver_path, exist_ok=True)
+        self.dataset_name: str = dataset_name
+        self.bronze_path: Path = BRONZE_DIR / dataset_name
+        self.silver_path: Path = SILVER_DIR / dataset_name
+
+        # Ensure the destination directory exists
+        self.silver_path.mkdir(parents=True, exist_ok=True)
 
     @abstractmethod
-    def process_historical(self):
+    def process_historical(self) -> None:
         """
         Orchestrates the transformation of deep historical archives.
 
@@ -52,7 +51,7 @@ class BaseTransformer(ABC):
         pass
 
     @abstractmethod
-    def process_recent(self):
+    def process_recent(self) -> None:
         """
         Orchestrates the transformation of recent incremental data.
 
