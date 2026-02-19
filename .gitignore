@@ -27,6 +27,7 @@ Thumbs.db
 
 # --- Data ---
 data/
+logs/
 *.parquet
 *.json
 *.csv
