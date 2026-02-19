@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .base_transformer import BaseTransformer
 from .config import CRYPTO_PAIRS, COLUMN_MAPPING, FINAL_COLUMNS, PARQUET_COMPRESSION
+from src.utils.logger import get_logger
 
 class BinanceTransformer(BaseTransformer):
     """
@@ -25,11 +26,10 @@ class BinanceTransformer(BaseTransformer):
     """
     
     def __init__(self):
-        """
-        Initializes the Transformer using the master crypto asset list.
-        """
+        # Initializes the Transformer using the master crypto asset list and Logger.
         super().__init__(dataset_name="crypto_binance")
         self.pairs = CRYPTO_PAIRS
+        self.log = get_logger("BinanceTransformer")
 
     def _transform_dataframe(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """
@@ -87,7 +87,7 @@ class BinanceTransformer(BaseTransformer):
         - Deduplicates records to resolve overlaps between monthly and daily files.
         - Saves a single optimized Parquet file: 'data/silver/crypto_binance/coin_id={coin}/historical_master.parquet'
         """
-        print(f"🔨 Initiating Silver Transformation (Historical) for {len(self.pairs)} assets.")
+        self.log.info(f"Initiating Silver Transformation (Historical) for {len(self.pairs)} assets.")
 
         source_dir: Path = self.bronze_path / "historical_monthly"
 
@@ -103,14 +103,14 @@ class BinanceTransformer(BaseTransformer):
 
             # Idempotency Check: Don't re-process if the Silver file exists
             if output_file.exists():
-                print(f"  ⏩ Skipping {symbol} (Silver Parquet already exists)")
+                self.log.info(f"Skipping {symbol} (Silver Parquet already exists)")
                 continue
 
             if not coin_source_path.exists():
-                print(f"  ⚠️  No Bronze data found for {symbol}")
+                self.log.warning(f"No Bronze data found for {symbol}")
                 continue
 
-            print(f"  🔄 Processing {symbol}.", end="\r")
+            self.log.info(f"Processing Historical Data for {symbol}.")
 
             # memory buffer for all monthly data of this coin
             all_dfs = []
@@ -127,7 +127,7 @@ class BinanceTransformer(BaseTransformer):
                             clean_df = self._transform_dataframe(df, symbol)
                             all_dfs.append(clean_df)
                 except Exception as error:
-                    print(f"\n  ❌ Error reading archive {zip_path.name}: {error}")
+                    self.log.error(f"Error reading archive {zip_path.name}: {error}")
                     # Silent fail on bad zips to keep loop moving
                     pass
 
@@ -136,16 +136,20 @@ class BinanceTransformer(BaseTransformer):
                 master_df = pd.concat(all_dfs)
 
                 # Deduplication Shield
-                # Resolve overlaps: If timestamps collide, keep the last one processed.
+                original_len = len(master_df)
                 master_df.drop_duplicates(subset=["source_updated_at"], keep="last", inplace=True)
+                dropped_rows = original_len - len(master_df)
+
+                if dropped_rows > 0:
+                    self.log.info(f"[{symbol}] Deduplication: Dropped {dropped_rows:,} overlapping rows.")
 
                 # Sort by Time -> Write Parquet
                 master_df.sort_values("source_updated_at", inplace=True)
 
                 master_df.to_parquet(output_file, compression=PARQUET_COMPRESSION)
-                print(f"  ✅ Transformed {len(master_df):,} rows for {symbol}       ")
+                self.log.info(f"Transformed {len(master_df):,} rows for {symbol}")
             else:
-                print(f"  ⚠️  No valid data extracted for {symbol}      ")
+                self.log.warning(f"No valid data extracted for {symbol}")
 
     def process_recent(self):
         """
@@ -158,7 +162,7 @@ class BinanceTransformer(BaseTransformer):
         - Deduplicates to ensure no overlaps (Gap-Fill Strategy).
         - Overwrites the Master Parquet file with the updated timeline.
         """
-        print(f"🔨 Initiating Silver Transformation (Recent Daily) for {len(self.pairs)} assets.")
+        self.log.info(f"Initiating Silver Transformation (Recent Daily) for {len(self.pairs)} assets.")
         
         recent_dir: Path = self.bronze_path / "recent_daily"
 
@@ -174,7 +178,7 @@ class BinanceTransformer(BaseTransformer):
 
             # Pre-flight checks
             if not master_file.exists():
-                print(f"  ⚠️  Skipping {symbol}: No Historical Master found to merge with.")
+                self.log.warning(f"Skipping {symbol}: No Historical Master found to merge with.")
                 continue
 
             if not coin_recent_path.exists():
@@ -186,7 +190,7 @@ class BinanceTransformer(BaseTransformer):
             if not zip_files:
                 continue
 
-            print(f"  🔄 Merging {len(zip_files)} daily files for {symbol}.", end="\r")
+            self.log.info(f"Merging {len(zip_files)} daily files for {symbol}.")
 
             # 1. Load New Daily Data
             new_dfs = []
@@ -217,8 +221,13 @@ class BinanceTransformer(BaseTransformer):
                     combined_df = pd.concat([master_df, daily_df])
 
                     # 5. Deduplicate (The Critical "Gap Fill" Step)
-                    # If a row exists in both, I keep the last one (assumed to be the recent one)
+                    # Track overlapping rows
+                    original_len = len(combined_df)
                     combined_df.drop_duplicates(subset=["source_updated_at"], keep="last", inplace=True)
+                    dropped_rows = original_len - len(combined_df)
+
+                    if dropped_rows > 0:
+                        self.log.info(f"[{symbol}] Deduplication: Dropped {dropped_rows:,} overlapping rows.")
 
                     # 6. Sort
                     combined_df.sort_values("source_updated_at", inplace=True)
@@ -226,8 +235,8 @@ class BinanceTransformer(BaseTransformer):
                     # 7. Atomic Overwrite
                     combined_df.to_parquet(master_file, compression=PARQUET_COMPRESSION)
 
-                    print(f"  ✅ Merged & Updated {symbol}: Now {len(combined_df):,} rows.")
+                    self.log.info(f"Merged & Updated {symbol}: Now {len(combined_df):,} rows.")
                 except Exception as error:
-                     print(f"  ❌ Failed to merge {symbol}: {error}")
+                     self.log.error(f"Failed to merge {symbol}: {error}")
             else:
-                print(f"  ⚠️  No valid rows extracted from daily files for {symbol}")
+                self.log.warning(f"No valid rows extracted from daily files for {symbol}")

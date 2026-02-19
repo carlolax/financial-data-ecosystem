@@ -10,36 +10,58 @@ Usage:
 """
 
 import argparse
+from typing import Optional
+
 from .binance_transformer import BinanceTransformer
+from .base_transformer import BaseTransformer
+from src.utils.logger import get_logger
 
 def main() -> None:
-    """
-    Parses command-line arguments and orchestrates the transformation process.
-    
-    The function instantiates the appropriate Transformer class (currently 
-    Binance-focused) and executes the requested data processing strategy 
-    (Historical Backfill or Recent Gap-Fill).
-    """
-    parser = argparse.ArgumentParser(description="Silver Layer Transformation Engine")
-    
-    # Argument: The Transformation Scope
+    # Parses command-line arguments and orchestrates the transformation process.
+    # Initialize the Orchestrator Logger
+    log = get_logger("SilverOrchestrator")
+
+    parser = argparse.ArgumentParser(description="Institutional Data Transformation Engine")
+
+    # Argument 1: The Mode (Time Horizon)
     parser.add_argument(
         "--mode", 
-        choices=["historical", "recent"], 
+        choices=["historical", "recent"],
         required=True, 
-        help="Selects the transformation scope: 'historical' (Deep Archives) or 'recent' (Daily Gap-Fill)."
+        help="Selects the transformation phase: 'historical' (Deep Backfill) or 'recent' (Gap-Fill)."
     )
-    
+
+    # Argument 2: The Source (Data Provider)
+    parser.add_argument(
+        "--source", 
+        choices=["binance"], 
+        default="binance", 
+        help="Selects the market data provider strategy."
+    )
+
     args = parser.parse_args()
-    
-    # Factory Logic: Instantiate the specific transformer
-    transformer = BinanceTransformer()
-    
-    # Strategy Execution
-    if args.mode == "historical":
-        transformer.process_historical()
-    elif args.mode == "recent":
-        transformer.process_recent()
+
+    # Log the exact parameters used to start the run
+    log.info(f"=== SILVER PIPELINE STARTED | Mode: {args.mode.upper()} | Source: {args.source.upper()} ===")
+
+    # Initialize the transformer variable with the Base class type hint
+    transformer: Optional[BaseTransformer] = None
+
+    if args.source == "binance":
+        log.info("Routing to Market Data Transformation Strategy (Binance).")
+        transformer = BinanceTransformer()
+
+    # Execute the selected strategy
+    if transformer:
+        if args.mode == "historical":
+            transformer.process_historical()
+        elif args.mode == "recent":
+            transformer.process_recent()
+
+        log.info("=== SILVER PIPELINE FINISHED ===")
+    else:
+        log.error(f"No transformation strategy found for source '{args.source}'.")
+        log.info("=== SILVER PIPELINE ABORTED ===")
 
 if __name__ == "__main__":
     main()
