@@ -29,14 +29,14 @@ CRYPTO_PAIRS: List[str] = [
     "XRPUSDT", "ADAUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", 
     "DOTUSDT", "ATOMUSDT", "ETCUSDT", "VETUSDT",
     # Tier 3: Layer 2s (Scaling Solutions)
-    "ARBUSDT", "MATICUSDT", "OPUSDT", "STRKUSDT", "IMXUSDT",
+    "ARBUSDT", "MATICUSDT", "OPUSDT", "STRKUSDT", "IMXUSDT", "MNTUSDT",
     # Tier 4: AI & Data (The 2024/25 Narrative)
     "FETUSDT", "RENDERUSDT", "TAOUSDT", "NEARUSDT", "GRTUSDT", "WLDUSDT", "ARKMUSDT",
     # Tier 5: DeFi & Real Yield
     "UNIUSDT", "AAVEUSDT", "MKRUSDT", "LDOUSDT", "RUNEUSDT", 
-    "JUPUSDT", "ENAUSDT", "PENDLEUSDT", "INJUSDT",
+    "JUPUSDT", "ENAUSDT", "PENDLEUSDT", "INJUSDT", "ONDOUSDT",
     # Tier 6: High Performance L1s (The "Solana Killers")
-    "AVAXUSDT", "SUIUSDT", "SEIUSDT", "APTUSDT", 
+    "AVAXUSDT", "SUIUSDT", "SEIUSDT", "APTUSDT", "KASUSDT",
     "HBARUSDT", "FTMUSDT", "TIAUSDT",
     # Tier 7: Gaming & Metaverse
     "GALAUSDT", "AXSUSDT", "SANDUSDT", "MANAUSDT", "BEAMXUSDT",
