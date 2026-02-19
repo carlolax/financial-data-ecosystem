@@ -67,6 +67,8 @@ class CryptoFeaturizer(BaseFeaturizer):
         # Ensure rows are sorted by time (Crucial for TA calculations)
         df.sort_values("source_updated_at", inplace=True)
 
+        df.reset_index(drop=True, inplace=True)
+
         return df
 
     def add_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -109,6 +111,9 @@ class CryptoFeaturizer(BaseFeaturizer):
         # Shift(1) means "Previous Close".
         # I use numpy for vectorization speed.
         df["log_ret"] = np.log(df["close"] / df["close"].shift(1))
+
+        # Replace infinite values (division by zero) with NaNs so they can be dropped
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
 
         # 6. Clean Up
         # Indicators like SMA_200 require the first 200 rows to calculate.

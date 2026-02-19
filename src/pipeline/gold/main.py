@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import sys
+import gc
 from pathlib import Path
 from typing import List
 
@@ -28,12 +29,10 @@ def get_available_assets(silver_path: Path) -> List[str]:
         return []
 
     # Look for folders starting with "coin_id="
-    # Folder structure: .../silver/crypto_binance/coin_id=btc
     coin_folders = sorted(list(silver_path.glob("coin_id=*")))
 
     assets = []
     for folder in coin_folders:
-        # Extract 'btc' from 'coin_id=btc'
         coin_id = folder.name.split("=")[1]
         assets.append(coin_id)
 
@@ -66,7 +65,6 @@ def main() -> None:
         print("🔍 Scanning Silver Layer for available assets.")
         target_assets = get_available_assets(featurizer.source_path)
     else:
-        # User specified specific coins
         target_assets = [a.lower() for a in args.assets]
 
     if not target_assets:
@@ -93,6 +91,13 @@ def main() -> None:
             featurizer.save_data(rich_df, coin_id)
 
             success_count += 1
+
+            # Explicitly delete the DataFrames to free up RAM immediately
+            del df
+            del rich_df
+
+            # Force the Garbage Collector to release the memory back to the OS
+            gc.collect()
 
         except FileNotFoundError:
             print(f"  ⚠️  Skipping {coin_id.upper()}: No Silver data found.")
