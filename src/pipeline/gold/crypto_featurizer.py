@@ -6,11 +6,11 @@ indicators to the Silver Layer data. It uses the 'pandas_ta' library to calculat
 signals efficiently.
 
 Key Features:
-- **Momentum:** Relative Strength Index (RSI).
-- **Trend:** Moving Average Convergence Divergence (MACD).
-- **Volatility:** Bollinger Bands (BBANDS).
-- **Averages:** Simple Moving Averages (SMA) for 50 and 200 periods.
-- **Stationarity:** Logarithmic Returns (essential for Machine Learning).
+- Momentum: Relative Strength Index (RSI).
+- Trend: Moving Average Convergence Divergence (MACD).
+- Volatility: Bollinger Bands (BBANDS).
+- Averages: Simple Moving Averages (SMA) for 50 and 200 periods.
+- Stationarity: Logarithmic Returns (essential for Machine Learning).
 """
 
 import pandas as pd
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base_featurizer import BaseFeaturizer
+from src.utils.logger import get_logger
 
 class CryptoFeaturizer(BaseFeaturizer):
     """
@@ -31,7 +32,7 @@ class CryptoFeaturizer(BaseFeaturizer):
 
     def __init__(self) -> None:
         """
-        Initializes the Featurizer with standard paths.
+        Initializes the Featurizer with standard paths and the Logger.
 
         Source: data/silver/crypto_binance
         Output: data/gold/crypto_binance
@@ -42,6 +43,9 @@ class CryptoFeaturizer(BaseFeaturizer):
             source_path=project_root / "data" / "silver" / "crypto_binance",
             output_path=project_root / "data" / "gold" / "crypto_binance"
         )
+
+        # Initialize the Observer-based Logger
+        self.log = get_logger("CryptoFeaturizer")
 
     def load_data(self, coin_id: str) -> pd.DataFrame:
         """
@@ -59,6 +63,7 @@ class CryptoFeaturizer(BaseFeaturizer):
         file_path: Path = self.source_path / f"coin_id={coin_id}" / "historical_master.parquet"
 
         if not file_path.exists():
+            self.log.error(f"Silver data not found for {coin_id.upper()} at {file_path}")
             raise FileNotFoundError(f"❌ Silver data not found for {coin_id} at {file_path}")
 
         # Load Parquet file
@@ -123,8 +128,7 @@ class CryptoFeaturizer(BaseFeaturizer):
         dropped_rows = original_len - len(df)
 
         if dropped_rows > 0:
-            # I don't print here to avoid spamming the console, but good to know logic works
-            pass
+            self.log.info(f"Dropped {dropped_rows:,} rows due to NaN values (Indicator warm-up).")
 
         return df
 
@@ -144,4 +148,4 @@ class CryptoFeaturizer(BaseFeaturizer):
 
         # Save with Snappy compression (Fast & Efficient)
         df.to_parquet(output_file, compression="snappy")
-        print(f"  ✅ Saved Gold Data: {coin_id.upper()} ({len(df):,} rows, {len(df.columns)} features)")
+        self.log.info(f"Saved Gold Data: {coin_id.upper()} ({len(df):,} rows, {len(df.columns)} features)")

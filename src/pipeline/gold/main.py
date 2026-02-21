@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import List
 
 from .crypto_featurizer import CryptoFeaturizer
+from src.utils.logger import get_logger
+
+# Initialize the Orchestrator Logger globally for this script
+log = get_logger("GoldOrchestrator")
 
 def get_available_assets(silver_path: Path) -> List[str]:
     """
@@ -25,7 +29,7 @@ def get_available_assets(silver_path: Path) -> List[str]:
         List[str]: A list of coin IDs (e.g., ['btc', 'eth', 'sol']).
     """
     if not silver_path.exists():
-        print(f"❌ Error: Silver Path not found at {silver_path}")
+        log.error(f"Silver Path not found at {silver_path}")
         return []
 
     # Look for folders starting with "coin_id="
@@ -54,24 +58,28 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # Log the exact parameters used to start the run
+    log.info(f"=== GOLD PIPELINE STARTED | Assets: {args.assets} ===")
+
     # 1. Initialize the Featurizer
     featurizer = CryptoFeaturizer()
-    print(f"🥇 Gold Layer Initialized. Output: {featurizer.output_path}")
+    log.info(f"Gold Layer Initialized. Output: {featurizer.output_path}")
 
     # 2. Determine the Target List
     target_assets: List[str] = []
 
     if "all" in args.assets:
-        print("🔍 Scanning Silver Layer for available assets.")
+        log.info("Scanning Silver Layer for available assets.")
         target_assets = get_available_assets(featurizer.source_path)
     else:
         target_assets = [a.lower() for a in args.assets]
 
     if not target_assets:
-        print("⚠️  No assets found to process. Have you run the Silver Pipeline?")
+        log.warning("No assets found to process. Have you run the Silver Pipeline?")
+        log.info("=== GOLD PIPELINE ABORTED ===")
         sys.exit(0)
 
-    print(f"🚀 Starting Batch Processing for {len(target_assets)} assets.\n")
+    log.info(f"Starting Batch Processing for {len(target_assets)} assets.")
 
     # 3. Execution Loop
     success_count = 0
@@ -79,7 +87,7 @@ def main() -> None:
 
     for coin_id in target_assets:
         try:
-            print(f"  ⚙️  Engineering: {coin_id.upper()}.", end="\r")
+            log.info(f"Engineering Features: {coin_id.upper()}.")
 
             # Step A: Load
             df = featurizer.load_data(coin_id)
@@ -100,17 +108,15 @@ def main() -> None:
             gc.collect()
 
         except FileNotFoundError:
-            print(f"  ⚠️  Skipping {coin_id.upper()}: No Silver data found.")
+            log.warning(f"Skipping {coin_id.upper()}: No Silver data found.")
             fail_count += 1
         except Exception as error:
-            print(f"\n  ❌ Critical Failure on {coin_id.upper()}: {error}")
+            log.error(f"Critical Failure on {coin_id.upper()}: {error}")
             fail_count += 1
 
     # 4. Final Report
-    print("-" * 50)
-    print(f"🏁 Job Complete.")
-    print(f"   ✅ Success: {success_count}")
-    print(f"   ❌ Failed:  {fail_count}")
+    log.info(f"Job Complete. ✅ Success: {success_count} | ❌ Failed: {fail_count}")
+    log.info("=== GOLD PIPELINE FINISHED ===")
 
 if __name__ == "__main__":
     main()
